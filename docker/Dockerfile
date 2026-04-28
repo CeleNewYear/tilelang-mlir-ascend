@@ -1,5 +1,5 @@
 ARG CANN_VERSION=8.5.0
-ARG CHIP_TYPE=A3
+ARG CHIP_TYPE=a3
 ARG OS=ubuntu
 ARG OS_VERSION=22.04
 ARG PY_VERSION=3.11
@@ -57,10 +57,10 @@ RUN apt update && \
     zlib1g-dev && \
     apt clean && \
     rm -rf /var/lib/apt/lists/* && \
-    update-alternatives --install /usr/bin/clang   clang   /usr/bin/clang-15   100 \
+    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-15 100 \
     --slave /usr/bin/clang++ clang++ /usr/bin/clang++-15 && \
-    update-alternatives --install /usr/bin/lld     lld     /usr/bin/lld-15     100 \
-    --slave /usr/bin/ld.lld  ld.lld  /usr/bin/ld.lld-15  100
+    update-alternatives --install /usr/bin/lld lld /usr/bin/lld-15 100 \
+    --slave /usr/bin/ld.lld ld.lld /usr/bin/ld.lld-15
 
 # Update cmake to latest via Kitware repository
 RUN apt remove --purge --auto-remove --yes cmake && \
@@ -92,12 +92,13 @@ WORKDIR /home/tilelang
 #           the submodule build layer.
 # ============================================================
 COPY Makefile requirements.txt requirements-dev.txt ./
-RUN ${PY_VERSION} -m pip install "ninja>=1.12.0" && \
-    ${PY_VERSION} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu && \
-    ${PY_VERSION} -m pip install "torch_npu==2.7.1" && \
+RUN for PY in python{PY_VERSION}; do \
+    ${PY} -m pip install "ninja>=1.12.0" && \
+    ${PY} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu && \
+    ${PY} -m pip install "torch_npu==2.7.1" && \
     make install_dev_reqs PYTHON=${PY} && \
-    make install_rt_reqs PYTHON=${PY};
-    # Clean up stamp files and pip cache after ALL versions are installed
+    make install_rt_reqs PYTHON=${PY}; \
+    done && \
     rm -f .req_rt_installed .req_dev_installed && \
     rm -rf /root/.cache/pip
 
