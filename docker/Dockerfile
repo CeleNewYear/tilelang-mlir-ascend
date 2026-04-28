@@ -91,15 +91,13 @@ WORKDIR /home/tilelang
 #           (e.g. pybind11, build), so this layer must come BEFORE
 #           the submodule build layer.
 # ============================================================
-COPY Makefile requirements.txt requirements-dev.txt ./
-RUN for PY in python{PY_VERSION}; do \
-    ${PY} -m pip install "ninja>=1.12.0" && \
-    ${PY} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu && \
-    ${PY} -m pip install "torch_npu==2.7.1" && \
-    make install_dev_reqs PYTHON=${PY} && \
-    make install_rt_reqs PYTHON=${PY}; \
-    done && \
-    rm -f .req_rt_installed .req_dev_installed && \
+COPY requirements.txt requirements-dev.txt ./
+RUN python${PY_VERSION} -m pip install "ninja>=1.12.0" &&  \
+    python${PY_VERSION} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu &&  \
+    python${PY_VERSION} -m pip install "torch_npu==2.7.1" &&  \
+    make install_dev_reqs PYTHON=python${PY_VERSION} &&  \
+    make install_rt_reqs PYTHON=python${PY_VERSION} &&  \
+    rm -f .req_rt_installed .req_dev_installed &&  \
     rm -rf /root/.cache/pip
 
 # ============================================================
