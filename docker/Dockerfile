@@ -1,14 +1,20 @@
-FROM ubuntu:22.04
-
-SHELL ["/bin/bash", "-c"]
-ARG CHIP_TYPE=A3
 ARG CANN_VERSION=8.5.0
+ARG CHIP_TYPE=A3
+ARG OS=ubuntu
+ARG OS_VERSION=22.04
+ARG PY_VERSION=3.11
 ARG REGION=ChinaMainland
+
+FROM quay.io/ascend/cann:${CANN_VERSION}-${CHIP_TYPE}-${OS}${OS_VERSION}-py${PY_VERSION} AS base
+
+# Enable pipefail for robust error handling in pipelines
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
 ENV DEBIAN_FRONTEND=noninteractive \
-    TZ="Asia/shanghai" \
+    TZ="Asia/Shanghai" \
     CHIP_TYPE=${CHIP_TYPE} \
     CANN_VERSION=${CANN_VERSION} \
     REGION=${REGION} \
@@ -16,13 +22,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
 
+# ============================================================
+# Layer 1: System-level dependencies (stable, cached permanently)
+# ============================================================
 RUN apt update && \
     apt install --yes --no-install-recommends --no-install-suggests \
     bash \
     ca-certificates \
     curl \
     git \
-    gnupg \
+    gnupg2 \
     make \
     sudo \
     unzip \
@@ -32,6 +41,7 @@ RUN apt update && \
     rm -rf /var/lib/apt/lists/* && \
     update-ca-certificates
 
+# Dead-snakes PPA for multi-Python version support (e.g. 3.9, 3.10 on top of base)
 RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xBA6932366A755776" \
     | gpg --dearmor > /usr/share/keyrings/deadsnakes-ppa.gpg  && \
     chmod 644 /usr/share/keyrings/deadsnakes-ppa.gpg && \
@@ -44,45 +54,28 @@ RUN apt update && \
     clang-format \
     cmake \
     lld-15 \
-    python3-dev \
-    python3-venv \
-    python3.11 \
-    python3.11-dev \
-    python3.11-venv \
-    python3.11-distutils \
-    python3.9 \
-    python3.9-dev \
-    python3.9-venv \
-    python3.9-distutils \
     zlib1g-dev && \
     apt clean && \
     rm -rf /var/lib/apt/lists/* && \
     update-alternatives --install /usr/bin/clang   clang   /usr/bin/clang-15   100 \
     --slave /usr/bin/clang++ clang++ /usr/bin/clang++-15 && \
-    update-alternatives --install /usr/bin/lld     lld     /usr/bin/lld-15     100 && \
-    update-alternatives --install /usr/bin/ld.lld  ld.lld  /usr/bin/ld.lld-15  100
+    update-alternatives --install /usr/bin/lld     lld     /usr/bin/lld-15     100 \
+    --slave /usr/bin/ld.lld  ld.lld  /usr/bin/ld.lld-15  100
 
-RUN curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && \
-    python3.9 /tmp/get-pip.py && \
-    python3.10 /tmp/get-pip.py && \
-    python3.11 /tmp/get-pip.py && \
-    rm -f /tmp/get-pip.py && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1 \
-    --slave /usr/bin/python3 python3 /usr/bin/python3.9 \
-    --slave /usr/bin/pip pip /usr/local/bin/pip3.9 \
-    --slave /usr/bin/pip3 pip3 /usr/local/bin/pip3.9 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.10 2 \
-    --slave /usr/bin/python3 python3 /usr/bin/python3.10 \
-    --slave /usr/bin/pip pip /usr/local/bin/pip3.10 \
-    --slave /usr/bin/pip3 pip3 /usr/local/bin/pip3.10 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 3 \
-    --slave /usr/bin/python3 python3 /usr/bin/python3.11 \
-    --slave /usr/bin/pip pip /usr/local/bin/pip3.11 \
-    --slave /usr/bin/pip3 pip3 /usr/local/bin/pip3.11 && \
-    rm -f /usr/local/bin/pip /usr/local/bin/pip3 && \
-    update-alternatives --set python /usr/bin/python3.10
+# Update cmake to latest via Kitware repository
+RUN apt remove --purge --auto-remove --yes cmake && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends wget ca-certificates && \
+    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg > /dev/null && \
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main" | tee /etc/apt/sources.list.d/kitware.list && \
+    apt-get update && \
+    apt-get install -y cmake && \
+    apt-get install -y libzstd-dev && \
+    apt-get install -y patch && \
+    rm -rf /var/lib/apt/lists/* && \
+    echo "cmake version: $(cmake --version | head -n 1)"
 
-# Add user tilelang (optional, but main build runs as root)
+# Add user tilelang (non-root user for runtime security)
 RUN useradd tilelang \
     --create-home \
     --shell=/bin/bash \
@@ -92,55 +85,43 @@ RUN useradd tilelang \
 
 WORKDIR /home/tilelang
 
-# update cmake, libzstd-dev and patch for AscendNPU-IR build
-RUN apt remove --purge --auto-remove --yes cmake && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends wget gpg ca-certificates gnupg2 && \
-    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg > /dev/null && \
-    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main" | tee /etc/apt/sources.list.d/kitware.list && \
-    apt-get update && \
-    apt-get install -y cmake && \
-    apt-get install -y libzstd-dev && \
-    apt-get install -y patch && \
-    rm -rf /var/lib/apt/lists/* && \
-    echo cmake version: $(cmake --version | head -n 1)
-
-# Install tilelang requirements
-COPY Makefile requirements.txt requirements-dev.txt build/
-
-# Install CANN and tilelang requirements
-RUN cd build && \
-    make install_cann && \
-    for PY in python3.9 python3.10 python3.11; do \
-    ${PY} -m pip install "ninja>=1.12.0" && \
-    ${PY} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu && \
-    ${PY} -m pip install "torch_npu==2.7.1" && \
+# ============================================================
+# Layer 2: Python dependencies (cache until requirements files change)
+#           AscendNPU-IR build depends on some Python packages
+#           (e.g. pybind11, build), so this layer must come BEFORE
+#           the submodule build layer.
+# ============================================================
+COPY Makefile requirements.txt requirements-dev.txt ./
+RUN ${PY_VERSION} -m pip install "ninja>=1.12.0" && \
+    ${PY_VERSION} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu && \
+    ${PY_VERSION} -m pip install "torch_npu==2.7.1" && \
     make install_dev_reqs PYTHON=${PY} && \
-    make install_rt_reqs PYTHON=${PY} && \
+    make install_rt_reqs PYTHON=${PY};
+    # Clean up stamp files and pip cache after ALL versions are installed
     rm -f .req_rt_installed .req_dev_installed && \
-    rm -rf ~/.cache/pip; \
-    done && \
-    cd .. && \
-    rm -rf build
+    rm -rf /root/.cache/pip
 
+# ============================================================
+# Layer 3: Build AscendNPU-IR submodule (cached until .gitmodules changes).
+#           Avoids re-downloading and recompiling AscendNPU-IR
+#           on every source code change.
+# ============================================================
 
-# Install TileLang for 3.9/3.10/3.11 python dev
-COPY . tilelang-ascend/
-RUN cd tilelang-ascend && \
+# Step 3a: Initialize and checkout the AscendNPU-IR submodule only
+COPY .gitmodules ./
+RUN git init && \
+    git submodule init 3rdparty/AscendNPU-IR && \
+    git submodule update --init 3rdparty/AscendNPU-IR
+
+# Step 3b: Pass 1 — Replace llvm URL in AscendNPU-IR/.gitmodules
+#          (which lists llvm-project and torch-mlir as submodules)
+RUN cd 3rdparty/AscendNPU-IR && \
     if [ "$REGION" = "ChinaMainland" ]; then \
     find . -name ".gitmodules" -type f -exec sed -i 's|https://github.com/llvm/llvm-project.git|https://mirrors.tuna.tsinghua.edu.cn/git/llvm-project.git|g' {} + ; \
     fi
 
-RUN cd tilelang-ascend && \
-    git submodule sync && \
-    git submodule update --init
-
-RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
-    if [ "$REGION" = "ChinaMainland" ]; then \
-    find . -name ".gitmodules" -type f -exec sed -i 's|https://github.com/llvm/llvm-project.git|https://mirrors.tuna.tsinghua.edu.cn/git/llvm-project.git|g' {} + ; \
-    fi
-
-RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
+# Step 3c: Sync and download llvm-project + torch-mlir submodules with retry
+RUN cd 3rdparty/AscendNPU-IR && \
     git submodule sync && \
     git config --global http.postBuffer 524288000 && \
     git config --global http.lowSpeedLimit 0 && \
@@ -148,29 +129,49 @@ RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
     for i in $(seq 1 5); do \
     git submodule update --init --jobs 1 && break || \
     (echo "Submodule clone attempt $i failed, retrying in 10s..." && sleep 10); \
-    done
+    done && \
+    # Clean up global git config after use (don't pollute runtime image)
+    git config --global --unset http.postBuffer || true && \
+    git config --global --unset http.lowSpeedLimit || true && \
+    git config --global --unset http.lowSpeedTime || true
 
-RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
+# Step 3d: Pass 2 — Now torch-mlir/.gitmodules is available,
+#          replace its nested llvm-project URL too
+RUN cd 3rdparty/AscendNPU-IR && \
     if [ "$REGION" = "ChinaMainland" ]; then \
     find . -name ".gitmodules" -type f -exec sed -i 's|https://github.com/llvm/llvm-project.git|https://mirrors.tuna.tsinghua.edu.cn/git/llvm-project.git|g' {} + ; \
     fi
 
-RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
+# Step 3e: Build AscendNPU-IR
+RUN cd 3rdparty/AscendNPU-IR && \
     bash ./build-tools/apply_patches.sh && \
     rm -rf ./build && \
-    ./build-tools/build.sh -o ./build --python-binding --c-compiler=clang --cxx-compiler=clang++ --add-cmake-options="-DCMAKE_LINKER=lld -DLLVM_ENABLE_LLD=ON -DLLVM_ENABLE_RTTI=ON" --apply-patches --bishengir-publish=off
+    ./build-tools/build.sh -o ./build --python-binding --c-compiler=clang --cxx-compiler=clang++ \
+    --add-cmake-options="-DCMAKE_LINKER=lld -DLLVM_ENABLE_LLD=ON -DLLVM_ENABLE_RTTI=ON" \
+    --apply-patches --bishengir-publish=off
 
-# Copy compiled build files and clean up 3rdparty to save space
+# Step 3f: Save build artifacts and clean source to reduce final image size
 RUN mkdir -p /build/AscendNPU-IR/build && \
-    cp -r tilelang-ascend/3rdparty/AscendNPU-IR/build/* /build/AscendNPU-IR/build/
+    cp -r 3rdparty/AscendNPU-IR/build/* /build/AscendNPU-IR/build/ && \
+    rm -rf 3rdparty/AscendNPU-IR
 
+# ============================================================
+# Layer 4: Full source code + TileLang installation (rebuilt on source change)
+#           install_npuir.sh --bishengir-path skips AscendNPU-IR build
+#           and reuses /build/AscendNPU-IR/build/install artifacts.
+# ============================================================
+COPY . tilelang-ascend/
 RUN cd tilelang-ascend && \
-    bash install_npuir.sh --bishengir-path=/build/AscendNPU-IR/build/install
+    bash install_npuir.sh --bishengir-path=/build/AscendNPU-IR/build/install && \
+    rm -rf tilelang-ascend/3rdparty/AscendNPU-IR
 
-RUN rm -rf tilelang-ascend/3rdparty/AscendNPU-IR
-
-# Set environment variables for CANN
-RUN echo "source /usr/local/Ascend/cann/set_env.sh" >> ~/.bashrc
+# ============================================================
+# Layer 5: Final container configuration
+# ============================================================
+# Set CANN environment variables explicitly (ENV is more reliable than .bashrc sourcing)
+ENV ASCEND_HOME=/usr/local/Ascend/ascend-toolkit/latest \
+    ASCEND_AICPU_PATH=/usr/local/Ascend/ascend-toolkit/latest
+RUN echo "source /usr/local/Ascend/cann/set_env.sh" >> /home/tilelang/.bashrc
 
 # Add welcome message for container usage
 RUN echo "Welcome to TileLang AscendNPU IR Docker container!" > /etc/motd && \
@@ -185,3 +186,6 @@ RUN echo "Welcome to TileLang AscendNPU IR Docker container!" > /etc/motd && \
 # Show welcome message when entering an interactive bash shell via docker exec.
 RUN grep -q "TileLang MOTD" /etc/bash.bashrc || \
     printf '\n# TileLang MOTD\nif [[ $- == *i* ]] && [[ -f /etc/motd ]]; then\n  cat /etc/motd\nfi\n' >> /etc/bash.bashrc
+
+# Switch to non-root user as a security best practice
+USER tilelang

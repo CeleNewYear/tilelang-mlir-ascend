@@ -20,7 +20,7 @@ cloudpickle
 ml_dtypes
 psutil
 scipy
-torch
+torch>=2.7.1,<2.8.0
 thefuzz
 tabulate
 wheel
