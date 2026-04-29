@@ -11,7 +11,6 @@ ARG CHIP_TYPE=a3
 ARG OS=ubuntu
 ARG OS_VERSION=22.04
 ARG PY_VERSION=3.11
-ARG REGION=ChinaMainland
 
 FROM quay.io/ascend/cann:${CANN_VERSION}-${CHIP_TYPE}-${OS}${OS_VERSION}-py${PY_VERSION} AS base
 
@@ -21,11 +20,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
+ARG REGION=ChinaMainland
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ="Asia/Shanghai" \
-    CHIP_TYPE=${CHIP_TYPE} \
-    CANN_VERSION=${CANN_VERSION} \
-    REGION=${REGION} \
     http_proxy=${HTTP_PROXY} \
     https_proxy=${HTTPS_PROXY} \
     no_proxy=${NO_PROXY}
@@ -83,15 +80,7 @@ RUN apt remove --purge --auto-remove --yes cmake && \
     rm -rf /var/lib/apt/lists/* && \
     echo "cmake version: $(cmake --version | head -n 1)"
 
-# Add user tilelang (non-root user for runtime security)
-RUN useradd tilelang \
-    --create-home \
-    --shell=/bin/bash \
-    --uid=1000 \
-    --user-group && \
-    echo 'Defaults env_keep += "HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy"' >> /etc/sudoers.d/env_keep
-
-WORKDIR /home/tilelang
+WORKDIR /root
 
 COPY . tilelang-ascend/
 # ============================================================
@@ -114,10 +103,8 @@ RUN python${PY_VERSION} -m pip install "ninja>=1.12.0" && \
 # ============================================================
 
 # Step 3a: Initialize and checkout the AscendNPU-IR submodule only
-#          We must operate inside tilelang-ascend/ because COPY put the
-#          git repo (including .gitmodules) under this subdirectory.
 RUN cd tilelang-ascend && \
-    git config --global --add safe.directory /home/tilelang/tilelang-ascend && \
+    git config --global --add safe.directory /root/tilelang-ascend && \
     git submodule init 3rdparty/AscendNPU-IR && \
     git submodule update --init 3rdparty/AscendNPU-IR
 
@@ -138,7 +125,6 @@ RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
     git submodule update --init --jobs 1 && break || \
     (echo "Submodule clone attempt $i failed, retrying in 10s..." && sleep 10); \
     done && \
-    # Clean up global git config after use (don't pollute runtime image)
     git config --global --unset http.postBuffer || true && \
     git config --global --unset http.lowSpeedLimit || true && \
     git config --global --unset http.lowSpeedTime || true
@@ -178,11 +164,12 @@ RUN cd tilelang-ascend && \
 # Set CANN environment variables explicitly (ENV is more reliable than .bashrc sourcing)
 ENV ASCEND_HOME=/usr/local/Ascend/ascend-toolkit/latest \
     ASCEND_AICPU_PATH=/usr/local/Ascend/ascend-toolkit/latest
-RUN echo "source /usr/local/Ascend/cann/set_env.sh" >> /home/tilelang/.bashrc
+RUN echo "source /usr/local/Ascend/cann/set_env.sh" >> /root/.bashrc
 
 # Add welcome message for container usage
 RUN echo "Welcome to TileLang AscendNPU IR Docker container!" > /etc/motd && \
     echo "" >> /etc/motd && \
+    echo "TileLang URL: https://github.com/tile-ai/tilelang-mlir-ascend" >> /etc/motd && \
     echo "TileLang URL: https://github.com/tile-ai/tilelang-ascend/tree/npuir" >> /etc/motd && \
     echo "" >> /etc/motd && \
     echo "Pre-compiled AscendNPU-IR binaries are available at /build/AscendNPU-IR/build/" >> /etc/motd && \
@@ -193,6 +180,3 @@ RUN echo "Welcome to TileLang AscendNPU IR Docker container!" > /etc/motd && \
 # Show welcome message when entering an interactive bash shell via docker exec.
 RUN grep -q "TileLang MOTD" /etc/bash.bashrc || \
     printf '\n# TileLang MOTD\nif [[ $- == *i* ]] && [[ -f /etc/motd ]]; then\n  cat /etc/motd\nfi\n' >> /etc/bash.bashrc
-
-# Switch to non-root user as a security best practice
-USER tilelang
