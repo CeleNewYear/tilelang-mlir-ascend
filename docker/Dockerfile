@@ -1,3 +1,11 @@
+# ============================================================
+# Build arguments for FROM tag construction.
+# NOTE: Docker uses separate ARG scopes before and after FROM.
+#       Pre-FROM ARGs are only visible in the FROM line itself.
+#       To use them in ENV below, they must be re-declared
+#       after FROM (lines 14-17). This is a Docker design
+#       constraint, not a duplication bug.
+# ============================================================
 ARG CANN_VERSION=8.5.0
 ARG CHIP_TYPE=a3
 ARG OS=ubuntu
@@ -85,19 +93,18 @@ RUN useradd tilelang \
 
 WORKDIR /home/tilelang
 
+COPY . tilelang-ascend/
 # ============================================================
 # Layer 2: Python dependencies (cache until requirements files change)
 #           AscendNPU-IR build depends on some Python packages
 #           (e.g. pybind11, build), so this layer must come BEFORE
 #           the submodule build layer.
 # ============================================================
-COPY requirements.txt requirements-dev.txt ./
-RUN python${PY_VERSION} -m pip install "ninja>=1.12.0" &&  \
-    python${PY_VERSION} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu &&  \
-    python${PY_VERSION} -m pip install "torch_npu==2.7.1" &&  \
-    make install_dev_reqs PYTHON=python${PY_VERSION} &&  \
-    make install_rt_reqs PYTHON=python${PY_VERSION} &&  \
-    rm -f .req_rt_installed .req_dev_installed &&  \
+RUN python${PY_VERSION} -m pip install "ninja>=1.12.0" && \
+    python${PY_VERSION} -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cpu && \
+    python${PY_VERSION} -m pip install "torch_npu==2.7.1" && \
+    python${PY_VERSION} -m pip install -r tilelang-ascend/requirements-dev.txt && \
+    python${PY_VERSION} -m pip install -r tilelang-ascend/requirements.txt && \
     rm -rf /root/.cache/pip
 
 # ============================================================
@@ -107,20 +114,22 @@ RUN python${PY_VERSION} -m pip install "ninja>=1.12.0" &&  \
 # ============================================================
 
 # Step 3a: Initialize and checkout the AscendNPU-IR submodule only
-COPY .gitmodules ./
-RUN git init && \
+#          We must operate inside tilelang-ascend/ because COPY put the
+#          git repo (including .gitmodules) under this subdirectory.
+RUN cd tilelang-ascend && \
+    git config --global --add safe.directory /home/tilelang/tilelang-ascend && \
     git submodule init 3rdparty/AscendNPU-IR && \
     git submodule update --init 3rdparty/AscendNPU-IR
 
 # Step 3b: Pass 1 — Replace llvm URL in AscendNPU-IR/.gitmodules
 #          (which lists llvm-project and torch-mlir as submodules)
-RUN cd 3rdparty/AscendNPU-IR && \
+RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
     if [ "$REGION" = "ChinaMainland" ]; then \
     find . -name ".gitmodules" -type f -exec sed -i 's|https://github.com/llvm/llvm-project.git|https://mirrors.tuna.tsinghua.edu.cn/git/llvm-project.git|g' {} + ; \
     fi
 
 # Step 3c: Sync and download llvm-project + torch-mlir submodules with retry
-RUN cd 3rdparty/AscendNPU-IR && \
+RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
     git submodule sync && \
     git config --global http.postBuffer 524288000 && \
     git config --global http.lowSpeedLimit 0 && \
@@ -136,13 +145,13 @@ RUN cd 3rdparty/AscendNPU-IR && \
 
 # Step 3d: Pass 2 — Now torch-mlir/.gitmodules is available,
 #          replace its nested llvm-project URL too
-RUN cd 3rdparty/AscendNPU-IR && \
+RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
     if [ "$REGION" = "ChinaMainland" ]; then \
     find . -name ".gitmodules" -type f -exec sed -i 's|https://github.com/llvm/llvm-project.git|https://mirrors.tuna.tsinghua.edu.cn/git/llvm-project.git|g' {} + ; \
     fi
 
 # Step 3e: Build AscendNPU-IR
-RUN cd 3rdparty/AscendNPU-IR && \
+RUN cd tilelang-ascend/3rdparty/AscendNPU-IR && \
     bash ./build-tools/apply_patches.sh && \
     rm -rf ./build && \
     ./build-tools/build.sh -o ./build --python-binding --c-compiler=clang --cxx-compiler=clang++ \
@@ -151,18 +160,17 @@ RUN cd 3rdparty/AscendNPU-IR && \
 
 # Step 3f: Save build artifacts and clean source to reduce final image size
 RUN mkdir -p /build/AscendNPU-IR/build && \
-    cp -r 3rdparty/AscendNPU-IR/build/* /build/AscendNPU-IR/build/ && \
-    rm -rf 3rdparty/AscendNPU-IR
+    cp -r tilelang-ascend/3rdparty/AscendNPU-IR/build/* /build/AscendNPU-IR/build/ && \
+    rm -rf tilelang-ascend/3rdparty/AscendNPU-IR
 
 # ============================================================
 # Layer 4: Full source code + TileLang installation (rebuilt on source change)
 #           install_npuir.sh --bishengir-path skips AscendNPU-IR build
 #           and reuses /build/AscendNPU-IR/build/install artifacts.
 # ============================================================
-COPY . tilelang-ascend/
 RUN cd tilelang-ascend && \
     bash install_npuir.sh --bishengir-path=/build/AscendNPU-IR/build/install && \
-    rm -rf tilelang-ascend/3rdparty/AscendNPU-IR
+    rm -rf 3rdparty/AscendNPU-IR
 
 # ============================================================
 # Layer 5: Final container configuration
