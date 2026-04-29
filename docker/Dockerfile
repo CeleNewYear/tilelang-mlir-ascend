@@ -2,7 +2,7 @@
 # Build arguments for FROM tag construction.
 # NOTE: Docker uses separate ARG scopes before and after FROM.
 #       Pre-FROM ARGs are only visible in the FROM line itself.
-#       To use them in ENV below, they must be re-declared
+#       To use them in ENV below, they must be redeclared
 #       after FROM (lines 14-17). This is a Docker design
 #       constraint, not a duplication bug.
 # ============================================================
