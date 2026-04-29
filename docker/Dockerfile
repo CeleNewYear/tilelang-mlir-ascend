@@ -20,6 +20,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
+ARG PY_VERSION=3.11
 ARG REGION=ChinaMainland
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ="Asia/Shanghai" \
