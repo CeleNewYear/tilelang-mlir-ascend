@@ -9,6 +9,10 @@ description: TileLang npuir Cube 算子开发指南。用户提及 GEMM、matmul
 
 Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)".
 
+## Mode-asking rule (Mandatory)
+
+When the user asks to write a new cube kernel or port a GPU GEMM to NPU without specifying Developer or Expert mode, you MUST ask the user which mode to use before generating any code. Never assume a default mode.
+
 ## Operator baseline rule (Mandatory)
 
 - Before writing a new cube operator, first check examples/ and testing/npuir/.
@@ -18,23 +22,35 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
 
 - matmul and batched matmul kernels
 - cube-heavy stages in mixed kernels
-- explicit L1 and L0C memory usage
+
+## Mode-specific memory and data movement
+
+| Aspect | Developer mode | Expert mode |
+|--------|---------------|-------------|
+| Input memory | `T.alloc_shared(shape, dtype)` | `T.alloc_L1(shape, dtype)` |
+| Accumulator | `T.alloc_fragment(shape, accum_dtype)` | `T.alloc_L0C(shape, accum_dtype)` |
+| Load data | `T.copy(src, dst)` | `T.load_nd2nz(src, dst, size)` |
+| Store data | `T.copy(C_buf, C_out)` | `T.store_fixpipe(C_buf, C_out, size=[M,N], enable_nz2nd=True)` |
+| Layout | ND tensors throughout | ND → NZ (load) → ND (store) |
+| Scope | No explicit scope needed | `T.Scope("Cube")` required |
 
 ## Core APIs
 
-- T.alloc_shared (Developer mode)
-- T.alloc_L1 (Expert mode only)
-- T.alloc_L0C (Expert mode only)
-- T.load_nd2nz (Expert mode only)
-- T.gemm
-- T.store_fixpipe (Expert mode only)
+- T.gemm(A, B, C, initC=True or False, b_transpose=True or False, size=[M, K, N])
 
 ## Minimal flow
 
-1. Partition blocks for M and N
-2. Load global tiles with load_nd2nz in Expert mode or T.copy in Developer mode
-3. Accumulate with T.gemm(initC controlled by k-loop)
-4. Store outputs with store_fixpipe in Expert mode or T.copy in Developer mode
+1. Ask user for mode if not specified
+2. Partition blocks for M and N
+3. **Developer**: alloc_shared → T.copy in → T.gemm → T.copy out
+4. **Expert**: alloc_L1 → load_nd2nz → T.gemm → store_fixpipe
+5. K-loop with `initC=(k==0)` for accumulation
+6. Validate against torch reference
+
+## Data type safety (Mandatory)
+
+- For fp16 input GEMM, destination/accumulation must use fp32.
+- Setting destination to fp16 for fp16 input GEMM may cause runtime hang.
 
 ## NZ format rule
 
@@ -56,8 +72,8 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
 
 ## Official docs to consult
 
-- docs/Tilelang.language/内存操作/T.alloc_shared.md
 - docs/Tilelang.language/线性代数操作/T.gemm.md
+- docs/Tilelang.language/内存操作/T.alloc_shared.md
 - docs/Tilelang.language/内存操作/T.load_nd2nz.md
 - docs/Tilelang.language/内存操作/T.store_fixpipe.md
 - docs/Tilelang.language/内存操作/T.alloc_L1.md

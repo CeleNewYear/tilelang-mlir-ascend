@@ -1,9 +1,9 @@
-PR workflow for npuir
+PR workflow for TileLang
 
 1) Branch sync
 - git fetch upstream
 - git checkout <feature-branch>
-- git rebase upstream/npuir
+- git rebase upstream/main
 
 2) Local validation
 - run focused tests for changed area
@@ -12,11 +12,11 @@ PR workflow for npuir
 	bash format.sh --files changed_files
 
 3) Commit and push
-- write clear commit message
+- write clear commit message with category prefix
 - git push origin <feature-branch>
 
 4) PR creation
-- target branch: npuir
-- PR title must start with [AscendNPU-IR]
+- target branch: main
+- PR title must start with category prefix: [DOCS] [Example] [Codegen] [Pass] [Op] [Runtime] [CI] [Fix] [Refactor] [Benchmark]
 - include repro, scope, and risk notes
 - track CI and update quickly on failures

@@ -1,7 +1,7 @@
-Issue template hints for npuir
+Issue template hints for TileLang
 
 Title:
-- Prefix with [npuir] or [AscendNPU-IR]
+- Prefix with category: [DOCS] [Example] [Codegen] [Pass] [Op] [Runtime] [CI] [Fix] [Refactor] [Benchmark]
 
 Body:
 - Environment and branch

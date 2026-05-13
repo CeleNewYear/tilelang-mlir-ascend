@@ -9,6 +9,10 @@ description: TileLang npuir 混合 Cube+Vector 算子开发技能。用户提及
 
 Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)".
 
+## Mode-asking rule (Mandatory)
+
+When the user asks to write a new MixCV kernel or port a GPU attention kernel to NPU without specifying Developer or Expert mode, you MUST ask the user which mode to use before generating any code. Never assume a default mode.
+
 ## Operator baseline rule (Mandatory)
 
 - Before writing a new MixCV operator, first check examples/ and testing/npuir/.
@@ -27,10 +31,18 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
     2) Vector-side compute contains at least one v-prefix op (for example T.vmul, T.vadd, T.vexp, T.vcast, T.vbrc).
 - If both conditions hold, route to this skill even if the user does not explicitly say "mixcv".
 
+## Memory by mode
+
+| Aspect | Developer mode | Expert mode |
+|--------|---------------|-------------|
+| Buffer allocation | `T.alloc_shared` / `T.alloc_fragment` | `T.alloc_L1` / `T.alloc_L0C` / `T.alloc_ub` |
+| Data movement | `T.copy` | `T.copy` / `T.load_nd2nz` / `T.store_fixpipe` |
+| Scope | Compiler-managed (no explicit Scope) | Explicit `T.Scope("Cube")` and `T.Scope("Vector")` |
+
 ## Key primitives
 
-- T.Scope("Cube") and T.Scope("Vector")
-- T.rs("PIPE_FIX") and other pipe regions
+- T.Scope("Cube") and T.Scope("Vector") — Expert only
+- T.rs("PIPE_FIX") and other pipe regions — Expert only
 - T.sync_block_set and T.sync_block_wait
 - Pipelined loops where suitable
 
