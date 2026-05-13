@@ -10,7 +10,12 @@ Reference from skill `present_limit.md` files.
 - **Workaround**: use strings `"float32"` / `"float16"`
 - **Date**: 2026-05-13
 
-## 2. Atomic_add cbuf→gm unsupported in Developer mode
-- **File**: `hivm.hir.store` only supports ub→gm
+## 2. Atomic_add cbuf→gm unsupported for single-element (Developer mode)
+- **File**: `hivm.hir.store` only supports ub→gm for single-element store; contiguous tiles work
+- **Workaround**: per-block output buffer + host reduction
+- **Date**: 2026-05-13
+
+## 3. Cross-block atomic_add to same element produces wrong results
+- **File**: Multiple blocks doing `T.atomic_add` to same global address gives incorrect values
 - **Workaround**: per-block output buffer + host reduction
 - **Date**: 2026-05-13

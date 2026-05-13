@@ -37,10 +37,19 @@ Delete entries here as the compiler/codegen catches up.
   ```
 - **Date**: 2026-05-13
 
-## 5. Atomic_add from shared memory (cbuf) to global memory (gm) unsupported
+## 5. Atomic_add from shared memory (cbuf) to global memory (gm) — contiguous tiles work; single-element fails
 
-- **Limit**: In Developer mode, `T.atomic_add` from shared buffer to global output fails with
-  `hivm.hir.store op only support store ub to gm currently`
-- **Workaround**: Write per-block results to a 2D output buffer (`[num_blocks, num_experts]`),
+- **Limit**: In Developer mode, `T.atomic_add` from shared buffer to a single global element fails with
+  `hivm.hir.store op only support store ub to gm currently`.
+  Contiguous-tile atomic_add from shared memory **works** for 1D/2D/3D tiles.
+- **Workaround for single-element**: Write per-block results to a 2D output buffer (`[num_blocks, ...]`),
   then reduce on host with `torch.sum(dim=0)`
+- **Date**: 2026-05-13
+
+## 6. Cross-block atomic_add to the same output element produces wrong results
+
+- **Limit**: Multiple Ascend blocks doing `T.atomic_add` to the same global output element
+  produces incorrect numerical results (even in Expert mode with UB→GM).
+  Cross-block atomic_add to different output positions works correctly.
+- **Workaround**: Per-block output buffer + host reduction
 - **Date**: 2026-05-13
