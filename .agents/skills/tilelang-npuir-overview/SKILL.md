@@ -35,6 +35,26 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
 Common mode switch:
 - os.environ["TILELANG_ASCEND_MODE"] = "Developer"
 
+## Build workflow (prebuilt BishengIR)
+
+When AscendNPU-IR is already compiled and installed at a known path, use
+`--bishengir-path` to skip the 3rdparty build and save significant time:
+
+```bash
+# Ask the user for their AscendNPU-IR install path, then:
+bash install_npuir.sh --bishengir-path=/path/to/AscendNPU-IR/build/install
+```
+
+Without this flag, `install_npuir.sh` will clone and build the full
+AscendNPU-IR tree from `3rdparty/`, including all recursive submodules.
+**Always ask the user for the prebuilt path first** before running the
+install script.  If the user does not provide one, fall back to the
+full build.
+
+Typical prebuilt paths:
+- `/home/<user>/AscendNPUIR/AscendNPU-IR/build/install`
+- `/usr/local/AscendNPU-IR`
+
 ## References to read on demand
 
 - references/arch.md

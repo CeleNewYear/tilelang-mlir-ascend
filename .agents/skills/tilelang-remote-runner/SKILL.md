@@ -74,6 +74,7 @@ bash .agents/skills/tilelang-remote-runner/scripts/remote_run.sh \
 | 脚本 | 用途 |
 |------|------|
 | `scripts/remote_config.sh` | 远端连接配置 + 共享函数。用户可修改此文件适配自己的环境 |
+| `scripts/remote_install_whl.sh` | 本地构建 whl → 上传 → 远端 pip install → 验证安装 |
 | `scripts/remote_verify.sh` | 环境就绪检测：上传 `examples/flash_attn_npuir.py` 并执行 |
 | `scripts/remote_run.sh` | 通用远端执行：`remote_run.sh [-e KEY=VAL]... <kernel_path> [extra_args]` |
 

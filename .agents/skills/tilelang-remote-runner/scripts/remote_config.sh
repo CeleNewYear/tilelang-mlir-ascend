@@ -13,15 +13,15 @@ set -euo pipefail
 # REMOTE_HOST: (REQUIRED) target server address, e.g. "root@192.168.1.100".
 # Must be set via the TILELANG_REMOTE_HOST environment variable before sourcing this file:
 #   export TILELANG_REMOTE_HOST="root@192.168.1.100"
-REMOTE_HOST="${TILELANG_REMOTE_HOST:-""}"
+REMOTE_HOST="${TILELANG_REMOTE_HOST:-root@113.46.54.140}"
 
 # JUMP_HOST: (OPTIONAL) ProxyJump host alias from ~/.ssh/config.
 # Leave empty for direct connection.
-JUMP_HOST="${TILELANG_JUMP_HOST:-}"
+JUMP_HOST="${TILELANG_JUMP_HOST:-A3_proxy}"
 
 # DOCKER_CONTAINER: (OPTIONAL) running container name on the remote host.
 # Leave empty to execute directly on the remote host (no docker).
-DOCKER_CONTAINER="${TILELANG_DOCKER_CONTAINER:-}"
+DOCKER_CONTAINER="${TILELANG_DOCKER_CONTAINER:-guxinyang}"
 
 # ---- Paths & Defaults ----
 REMOTE_BASE_DIR="${TILELANG_REMOTE_BASE_DIR:-/tmp/tl_remote}"
