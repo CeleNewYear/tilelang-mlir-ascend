@@ -47,7 +47,7 @@ jobs:
           platforms: linux/arm64
           build-args: |
             REGION=other
-            CANN_VERSION=8.5.0
+            CANN_VERSION=${{ inputs.cann_version }}
             CHIP_TYPE=${{ matrix.chip }}
           tags: ${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.chip }}-${{ env.OS }}-${{ env.PYTHON }}-arm64
           cache-from: type=gha
@@ -84,7 +84,7 @@ jobs:
           platforms: linux/amd64
           build-args: |
             REGION=other
-            CANN_VERSION=8.5.0
+            CANN_VERSION=${{ inputs.cann_version }}
             CHIP_TYPE=${{ matrix.chip }}
           tags: ${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}-${{ matrix.chip }}-${{ env.OS }}-${{ env.PYTHON }}-x86_64
           cache-from: type=gha
