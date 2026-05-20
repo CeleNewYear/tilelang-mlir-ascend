@@ -280,18 +280,15 @@ private:
   void BarrierCodegen(const CallNode *op);
   void VselectCodegen(const CallNode *op);
   template <typename T, typename U>
-  mlir::Value BinaryOpCodegen(const PrimExprNode *op, U mode, mlir::Value lhs,
-                              mlir::Value rhs);
+  mlir::Value BinaryOpCodegen(const PrimExprNode *op, U mode, mlir::Value lhs, mlir::Value rhs);
   // Scalar ops codegen
   mlir::Value ScalarExpCodegen(const CallNode *op);
   mlir::Value ScalarExp2Codegen(const CallNode *op);
   mlir::Value ScalarLogCodegen(const CallNode *op);
   mlir::Value ScalarLog2Codegen(const CallNode *op);
 
-  mlir::Value NeedGenInsertSlice(Buffer buffer_data, Array<Range> range,
-                                 mlir::Value src);
-  mlir::Value ReshapeCastAndInsertSlice(mlir::Value tensor, mlir::Value dst,
-                                        Array<Range> dst_range);
+  mlir::Value NeedGenInsertSlice(Buffer buffer_data, Array<Range> range, mlir::Value src);
+  mlir::Value ReshapeCastAndInsertSlice(mlir::Value tensor, mlir::Value dst, Array<Range> dst_range);
   // returns HIVM address space against given address space
   mlir::hivm::AddressSpace GetHIVMAddressSpace(String address_space);
   std::vector<long int> GetShape(Array<PrimExpr> extents);
@@ -311,8 +308,7 @@ private:
   void UpdateMLIRValueMap(const mlir::Value key, mlir::Value val);
 
   // === helpers for ascend_copy lowering (member-functionized) ===
-  mlir::Value CreateCastIfTypeMismatch(mlir::Value src_value,
-                                       mlir::Value dst_value);
+  mlir::Value CreateCastIfTypeMismatch(mlir::Value src_value, mlir::Value dst_value);
   mlir::Value CreateStaticBackedTensor(mlir::RankedTensorType tensor_type,
                                        mlir::Value runtime_shape_source,
                                        mlir::Value static_bound_source,

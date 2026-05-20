@@ -203,9 +203,11 @@ getBroadcastDim(const Array<PrimExpr> &buffer_shape0,
   }
   CHECK(buffer_shape0.size() == buffer_shape1.size());
   for (int i = 0; i < buffer_shape0.size(); i++) {
-    if (*as_const_int(buffer_shape0[i]) == 1 && buffer_shape1[i] != 1) {
+    if (*as_const_int(buffer_shape0[i]) == 1 &&
+        buffer_shape1[i] != 1) {
       dims.emplace_back(i);
-    } else if (*as_const_int(buffer_shape0[i]) != 1 && buffer_shape1[i] == 1) {
+    } else if (*as_const_int(buffer_shape0[i]) != 1 &&
+               buffer_shape1[i] == 1) {
       dims.emplace_back(i);
     } else {
       CHECK(*as_const_int(buffer_shape0[i]) == buffer_shape1[i]);
@@ -223,9 +225,11 @@ getBroadcastDim(const llvm::ArrayRef<long int> &buffer_shape0,
   }
   CHECK(buffer_shape0.size() == buffer_shape1.size());
   for (int i = 0; i < buffer_shape0.size(); i++) {
-    if ((buffer_shape0[i]) == 1 && (buffer_shape1[i]) != 1) {
+    if ((buffer_shape0[i]) == 1 &&
+        (buffer_shape1[i]) != 1) {
       dims.emplace_back(i);
-    } else if ((buffer_shape0[i]) != 1 && (buffer_shape1[i]) == 1) {
+    } else if ((buffer_shape0[i]) != 1 &&
+               (buffer_shape1[i]) == 1) {
       dims.emplace_back(i);
     } else {
       CHECK((buffer_shape0[i]) == (buffer_shape1[i]));
@@ -274,14 +278,14 @@ static std::map<std::string, mlir::hivm::DeinterleaveMode>
     };
 
 namespace {
-/// Infer function core type: aic, aiv, mix
-class InferFuncCoreType : public StmtExprVisitor {
-  std::map<std::string, NPU_CORETYPE> scope_coretype_map{
-      {"shared", NPU_CORETYPE::AIV},
-      {"shared.cube", NPU_CORETYPE::AIC},
-      {"wmma.accumulator", NPU_CORETYPE::AIC},
-      {"wmma.matrix_a", NPU_CORETYPE::AIC},
-      {"wmma.matrix_b", NPU_CORETYPE::AIC}};
+  /// Infer function core type: aic, aiv, mix
+  class InferFuncCoreType : public StmtExprVisitor {
+    std::map<std::string, NPU_CORETYPE> scope_coretype_map{
+        {"shared", NPU_CORETYPE::AIV},
+        {"shared.cube", NPU_CORETYPE::AIC},
+        {"wmma.accumulator", NPU_CORETYPE::AIC},
+        {"wmma.matrix_a", NPU_CORETYPE::AIC},
+        {"wmma.matrix_b", NPU_CORETYPE::AIC}};
 
   public:
     bool hasVector = false;
@@ -339,41 +343,11 @@ class InferFuncCoreType : public StmtExprVisitor {
           return;
         }
       }
+      StmtExprVisitor::VisitStmt_(op); 
     }
-    StmtExprVisitor::VisitStmt_(op);
-  }
-  void VisitExpr_(const CallNode *op) final {
-
-    if (op->op.same_as(Op::Get("tl.npuir_dot")) ||
-        op->op.same_as(Op::Get("tl.npuir_load_nd2nz")) ||
-        op->op.same_as(Op::Get("tl.npuir_store_fixpipe"))) {
-      hasCube = true;
-    } else if (op->op.as<OpNode>()) {
-      // Convert TVM String to std::string
-      auto op_node = op->op.as<OpNode>();
-      std::string op_name = op_node->name;
-      // Check if it is another operation starting with tl.npuir
-      if (op_name.find("tl.npuir") == 0) {
-        hasVector = true;
-      }
-    }
-    StmtExprVisitor::VisitExpr_(op);
-  }
-  void VisitStmt_(const AllocateNode *op) final {
-    // It is cube kernel if there exists buffer with shared.dyn/wmma.xxx
-    // address space
-    std::string scope = GetPtrStorageScope(op->buffer_var);
-    if (func_coretype != NPU_CORETYPE::MIX) {
-      if (scope_coretype_map.count(scope) != 0) {
-        func_coretype = scope_coretype_map[scope];
-        hasExpert = true;
-      }
-    }
-    StmtExprVisitor::VisitStmt_(op);
-  }
-  NPU_CORETYPE func_coretype{NPU_CORETYPE::AIV};
-};
-} // namespace
+    NPU_CORETYPE func_coretype{NPU_CORETYPE::AIV};
+  };
+}  // namespace
 
 /*****************************************************************************************
 ******************************************************************************************
@@ -401,8 +375,9 @@ CodeGenTileLangNPUIRDEV::GetStrideFromShapeAPI(Array<tvm::PrimExpr> shape) {
   return strides;
 }
 
-mlir::Value CodeGenTileLangNPUIRDEV::ScalarConvertType(const PrimExpr &imm,
-                                                       DataType targetDtype) {
+mlir::Value
+CodeGenTileLangNPUIRDEV::ScalarConvertType(const PrimExpr &imm,
+                                           DataType targetDtype) {
   auto castNode = std::make_unique<tir::Cast>(targetDtype, imm);
   return MakeValue(*castNode);
 }
@@ -535,13 +510,13 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
 
   // Collect all variables defined in the loop body,
   // which may need to be carried as loop values
-  std::vector<const tir::VarNode *> loop_carried_vars;
+  std::vector<const tir::VarNode*> loop_carried_vars;
   std::vector<mlir::Value> init_values;
 
   // Traverse the body of the for loop body, and generate
   // region iter args
   CollectVarsUsedInBodyButDefinedOutside(op, loop_carried_vars);
-  for (const auto *var_node : loop_carried_vars) {
+  for (const auto* var_node : loop_carried_vars) {
     auto it = GetVarValue(var_node);
     ICHECK(it != mlir::Value{});
     init_values.push_back(it);
@@ -552,7 +527,11 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
       mlir::UnknownLoc::get(&context),
       builder.getIntegerAttr(GetMLIRType(op->min), 1));
   auto forOp = builder.create<mlir::scf::ForOp>(
-      module->getLoc(), lowerBoundId, upperBoundId, step, init_values);
+      module->getLoc(),
+      lowerBoundId,
+      upperBoundId,
+      step,
+      init_values);
 
   // Set the insertion point to the body of the loop
   OpBuilder::InsertionGuard saved(builder);
@@ -564,7 +543,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
   ICHECK(GetVarValue(loop_var.get()) == mlir::Value{});
   SetVarValue(loop_var.get(), forOp.getInductionVar());
   int iter = 0;
-  for (const auto *var_node : loop_carried_vars) {
+  for (const auto* var_node : loop_carried_vars) {
     SetVarValue(var_node, forOp.getRegionIterArg(iter++));
   }
 
@@ -573,7 +552,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
 
   // Collect the last updated value in the loop body as output yield
   std::vector<mlir::Value> yield_values;
-  for (const auto *var_node : loop_carried_vars) {
+  for (const auto* var_node : loop_carried_vars) {
     auto it = GetVarValue(var_node);
     ICHECK(it != mlir::Value{});
     yield_values.push_back(it);
@@ -587,7 +566,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::ForNode *op) {
   DeleteVarLayer();
 
   iter = 0;
-  for (const auto *var_node : loop_carried_vars) {
+  for (const auto* var_node : loop_carried_vars) {
     SetVarValue(var_node, forOp.getResult(iter++));
   }
 }
@@ -603,14 +582,14 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
 
   // Collect all variables defined out the if
   // which may need to be carried as if values
-  std::vector<const tir::VarNode *> if_carried_vars;
+  std::vector<const tir::VarNode*> if_carried_vars;
   std::vector<mlir::Value> init_values;
   llvm::SmallVector<mlir::Type> resultTypes;
 
   // Traverse the then_case and else_case of the IrThenElseNode
   // and generate region iter args
   CollectVarsUsedInBodyButDefinedOutside(op, if_carried_vars);
-  for (const auto *var_node : if_carried_vars) {
+  for (const auto* var_node : if_carried_vars) {
     auto it = GetVarValue(var_node);
     ICHECK(it != mlir::Value{});
     init_values.push_back(it);
@@ -625,7 +604,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
 
   // Add a new layer to var_map_
   AddVarLayer();
-  for (const auto *var_node : if_carried_vars) {
+  for (const auto* var_node : if_carried_vars) {
     SetVarValue(var_node, GetVarValue(var_node));
   }
 
@@ -636,7 +615,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
 
   // Collect the last updated value in the thenBlock as output yield
   std::vector<mlir::Value> yield_values;
-  for (const auto *var_node : if_carried_vars) {
+  for (const auto* var_node : if_carried_vars) {
     auto it = GetVarValue(var_node);
     ICHECK(it != mlir::Value{});
     yield_values.push_back(it);
@@ -651,7 +630,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
     // Remove the last layer of var_map_
     DeleteVarLayer();
     AddVarLayer();
-    for (const auto *var_node : if_carried_vars) {
+    for (const auto* var_node : if_carried_vars) {
       SetVarValue(var_node, GetVarValue(var_node));
     }
     // Set the insertion point to the false region
@@ -660,7 +639,7 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
     this->VisitStmt(op->else_case.value());
 
     yield_values.clear();
-    for (const auto *var_node : if_carried_vars) {
+    for (const auto* var_node : if_carried_vars) {
       auto it = GetVarValue((var_node));
       ICHECK(it != mlir::Value{});
       yield_values.push_back(it);
@@ -680,19 +659,21 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const tir::IfThenElseNode *op) {
   // Remove the last layer of var_map_
   DeleteVarLayer();
   int iter = 0;
-  for (const auto *var_node : if_carried_vars) {
+  for (const auto* var_node : if_carried_vars) {
     SetVarValue(var_node, ifOp.getResult(iter++));
   }
 }
 
 void CodeGenTileLangNPUIRDEV::CollectVarsUsedInBodyButDefinedOutside(
-    const tir::ForNode *op, std::vector<const VarNode *> &loop_carried_vars) {
+    const tir::ForNode *op, 
+    std::vector<const VarNode*>& loop_carried_vars) {
   LoopCarriedVarCollector collector(this, loop_carried_vars);
   collector.VisitStmt(op->body);
 }
 
 void CodeGenTileLangNPUIRDEV::CollectVarsUsedInBodyButDefinedOutside(
-    const IfThenElseNode *op, std::vector<const VarNode *> &if_carried_vars) {
+    const IfThenElseNode*op, 
+    std::vector<const VarNode*>& if_carried_vars) {
   LoopCarriedVarCollector collector(this, if_carried_vars);
   collector.VisitStmt(op->then_case);
   if (op->else_case) {
@@ -988,8 +969,8 @@ CodeGenTileLangNPUIRDEV::GenSubviewFromRegion(const CallNode *region_node) {
   return GenSubviewFromRegion(regionop.GetBuffer(), regionop.GetRanges());
 }
 
-mlir::Value CodeGenTileLangNPUIRDEV::GenExtractSliceFromRegion(
-    const CallNode *region_node) {
+mlir::Value
+CodeGenTileLangNPUIRDEV::GenExtractSliceFromRegion(const CallNode *region_node) {
   tvm::tl::RegionOp regionop(region_node->args, this->vmap);
   return GenExtractSliceFromRegion(regionop.GetBuffer(), regionop.GetRanges());
 }
@@ -1034,20 +1015,19 @@ mlir::Value CodeGenTileLangNPUIRDEV::GenSubviewFromRegion(Buffer buffer_data,
 
   auto subViewOp =
       builder.create<mlir::memref::SubViewOp>(builder.getUnknownLoc(),
-                                              v_value,    // Original memref
-                                              offsets,    // Offset
-                                              shape_val,  // Sizes or shape
-                                              strides_val // Strides
+                                               v_value,    // Original memref
+                                               offsets,    // Offset
+                                               shape_val,  // Sizes or shape
+                                               strides_val // Strides
       );
   return subViewOp;
 }
 
-mlir::Value
-CodeGenTileLangNPUIRDEV::GenExtractSliceFromRegion(Buffer buffer_data,
-                                                   Array<Range> range) {
+mlir::Value CodeGenTileLangNPUIRDEV::GenExtractSliceFromRegion(Buffer buffer_data,
+                                                               Array<Range> range) {
   Array<PrimExpr> region_shape;
   Array<PrimExpr> region_indices;
-  for (Range r : range) {
+  for (Range r: range) {
     region_shape.push_back(r.get()->extent);
     region_indices.push_back(r.get()->min);
   }
@@ -1058,7 +1038,7 @@ CodeGenTileLangNPUIRDEV::GenExtractSliceFromRegion(Buffer buffer_data,
   SmallVector<OpFoldResult> offsets;
   SmallVector<OpFoldResult> sizes;
   SmallVector<OpFoldResult> strides;
-  for (Range r : range) {
+  for (Range r: range) {
     if (auto s_int = as_const_int(r.get()->min)) {
       offsets.push_back(builder.getI64IntegerAttr(*s_int));
     } else {
@@ -1073,10 +1053,12 @@ CodeGenTileLangNPUIRDEV::GenExtractSliceFromRegion(Buffer buffer_data,
     }
     strides.push_back(builder.getI64IntegerAttr(1));
   }
-  auto extractSliceOp = builder.create<mlir::tensor::ExtractSliceOp>(
-      builder.getUnknownLoc(), v_value, offsets, sizes, strides);
+  auto extractSliceOp =
+      builder.create<mlir::tensor::ExtractSliceOp>(builder.getUnknownLoc(),
+          v_value, offsets, sizes, strides);
   return extractSliceOp.getResult();
 }
+
 
 mlir::Value CodeGenTileLangNPUIRDEV::CreateIndexCastOp(mlir::Value src) {
   std::pair<bool, mlir::Value> result = CheckMLIRValueMap(src);
@@ -1084,13 +1066,12 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateIndexCastOp(mlir::Value src) {
     return result.second;
   }
   mlir::Value indexVal = builder.create<mlir::arith::IndexCastOp>(
-      builder.getUnknownLoc(), builder.getIndexType(), src);
+    builder.getUnknownLoc(), builder.getIndexType(), src);
   UpdateMLIRValueMap(src, indexVal);
   return indexVal;
 }
 
-inline std::pair<bool, mlir::Value>
-CodeGenTileLangNPUIRDEV::CheckMLIRValueMap(mlir::Value val) {
+inline std::pair<bool, mlir::Value> CodeGenTileLangNPUIRDEV::CheckMLIRValueMap(mlir::Value val){
   mlir::Block *curr_block = builder.getInsertionBlock();
   auto it = this->mlir_value_map.find({val, curr_block});
   if (it != this->mlir_value_map.end()) {
@@ -1099,14 +1080,12 @@ CodeGenTileLangNPUIRDEV::CheckMLIRValueMap(mlir::Value val) {
   return std::pair(false, mlir::Value());
 }
 
-inline void CodeGenTileLangNPUIRDEV::UpdateMLIRValueMap(const mlir::Value key,
-                                                        mlir::Value val) {
+inline void CodeGenTileLangNPUIRDEV::UpdateMLIRValueMap(const mlir::Value key, mlir::Value val){
   mlir::Block *curr_block = builder.getInsertionBlock();
   this->mlir_value_map[{key, curr_block}] = val;
 }
 
-inline std::pair<bool, mlir::Value>
-CodeGenTileLangNPUIRDEV::CheckPrimExprMap(const PrimExprNode *op) {
+inline std::pair<bool, mlir::Value> CodeGenTileLangNPUIRDEV::CheckPrimExprMap(const PrimExprNode * op){
   mlir::Block *curr_block = builder.getInsertionBlock();
   auto it = this->prim_expr_map.find({GetRef<PrimExpr>(op), curr_block});
   if (it != this->prim_expr_map.end()) {
@@ -1115,17 +1094,14 @@ CodeGenTileLangNPUIRDEV::CheckPrimExprMap(const PrimExprNode *op) {
   return std::pair(false, mlir::Value());
 }
 
-inline void CodeGenTileLangNPUIRDEV::UpdatePrimExprMap(const PrimExprNode *key,
-                                                       mlir::Value val) {
+inline void CodeGenTileLangNPUIRDEV::UpdatePrimExprMap(const PrimExprNode * key, mlir::Value val){
   mlir::Block *curr_block = builder.getInsertionBlock();
   this->prim_expr_map[{GetRef<PrimExpr>(key), curr_block}] = val;
 }
 
 // Type casting for mismatched element types
-mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src,
-                                                              mlir::Value dst) {
-  // src is always a tensor, dst may be a tensor or a memref, the return value
-  // is always a tensor
+mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src, mlir::Value dst) {
+  // src is always a tensor, dst may be a tensor or a memref, the return value is always a tensor
 
   auto srcTensorTy = src.getType().dyn_cast<mlir::TensorType>();
   ICHECK(srcTensorTy) << "src must be a tensor";
@@ -1136,7 +1112,7 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src,
   mlir::Type srcElemTy = mlir::getElementTypeOrSelf(src.getType());
   mlir::Type dstElemTy = mlir::getElementTypeOrSelf(dst.getType());
 
-  if (srcElemTy == dstElemTy) {
+  if (srcElemTy == dstElemTy ) {
     return src;
   }
 
@@ -1187,10 +1163,11 @@ mlir::Value CodeGenTileLangNPUIRDEV::CreateCastIfTypeMismatch(mlir::Value src,
 
 // Insert slice into tensor
 mlir::Value CodeGenTileLangNPUIRDEV::InsertSlice(
-    mlir::Value src_slice, mlir::Value dst_tensor,
-    llvm::SmallVector<mlir::OpFoldResult> &dst_offsets,
-    llvm::SmallVector<mlir::OpFoldResult> &dst_sizes,
-    llvm::SmallVector<mlir::OpFoldResult> &dst_strides) {
+    mlir::Value src_slice, 
+    mlir::Value dst_tensor, 
+    llvm::SmallVector<mlir::OpFoldResult>& dst_offsets,
+    llvm::SmallVector<mlir::OpFoldResult>& dst_sizes,
+    llvm::SmallVector<mlir::OpFoldResult>& dst_strides) {
 
   auto loc = builder.getUnknownLoc();
 
@@ -1198,9 +1175,80 @@ mlir::Value CodeGenTileLangNPUIRDEV::InsertSlice(
   assert(dstTensorTy && "dst_tensor must be a ranked tensor");
 
   auto insertOp = builder.create<mlir::tensor::InsertSliceOp>(
-      loc, src_slice, dst_tensor, dst_offsets, dst_sizes, dst_strides);
+      loc,
+      src_slice,
+      dst_tensor,
+      dst_offsets,
+      dst_sizes,
+      dst_strides
+  );
 
   return insertOp.getResult();
+}
+
+mlir::Value CodeGenTileLangNPUIRDEV::CreateStaticBackedTensor(
+    mlir::RankedTensorType tensor_type, mlir::Value runtime_shape_source,
+    mlir::Value static_bound_source, mlir::Location loc) {
+  // Fast path: all dims are static, just create empty tensor
+  if (tensor_type.hasStaticShape()) {
+    return builder.create<mlir::tensor::EmptyOp>(loc, tensor_type.getShape(),
+                                                 tensor_type.getElementType());
+  }
+
+  // Dynamic dims path: derive static upper bounds directly from source types.
+  // In codegen, callers always provide GM buffer values (static shapes) as
+  // sources, so we check their types directly without recursive SSA traversal.
+  auto tryGetStaticDim = [](mlir::Value val, int64_t dim) -> int64_t {
+    if (!val)
+      return mlir::ShapedType::kDynamic;
+    auto ty = val.getType().dyn_cast<mlir::ShapedType>();
+    if (!ty || !ty.hasRank() || dim < 0 || dim >= ty.getRank())
+      return mlir::ShapedType::kDynamic;
+    return ty.getDimSize(dim); // static or kDynamic
+  };
+
+  auto rank = tensor_type.getRank();
+  llvm::SmallVector<int64_t> staticShape(tensor_type.getShape().begin(),
+                                         tensor_type.getShape().end());
+  for (int64_t i = 0; i < rank; ++i) {
+    if (!tensor_type.isDynamicDim(i))
+      continue;
+    int64_t bound = tryGetStaticDim(runtime_shape_source, i);
+    if (mlir::ShapedType::isDynamic(bound))
+      bound = tryGetStaticDim(static_bound_source, i);
+    ICHECK(!mlir::ShapedType::isDynamic(bound))
+        << "failed to infer static upper bound for dynamic tensor dim " << i
+        << "; ensure callers provide a static-shaped source";
+    staticShape[i] = bound;
+  }
+
+  mlir::Value fullEmpty = builder.create<mlir::tensor::EmptyOp>(
+      loc, staticShape, tensor_type.getElementType());
+
+  // Build extract_slice to recover the dynamic shape from runtime_shape_source
+  llvm::SmallVector<mlir::OpFoldResult> offsets(rank, builder.getIndexAttr(0));
+  llvm::SmallVector<mlir::OpFoldResult> strides(rank, builder.getIndexAttr(1));
+  llvm::SmallVector<mlir::OpFoldResult> sizes;
+  sizes.reserve(rank);
+  for (int64_t i = 0; i < rank; ++i) {
+    if (tensor_type.isDynamicDim(i)) {
+      // Inline DimOp creation — runtime_shape_source is always tensor or memref
+      if (runtime_shape_source.getType().isa<mlir::RankedTensorType>()) {
+        sizes.push_back(
+            builder.create<mlir::tensor::DimOp>(loc, runtime_shape_source, i)
+                .getResult());
+      } else {
+        sizes.push_back(
+            builder.create<mlir::memref::DimOp>(loc, runtime_shape_source, i)
+                .getResult());
+      }
+    } else {
+      sizes.push_back(builder.getIndexAttr(tensor_type.getDimSize(i)));
+    }
+  }
+
+  return builder.create<mlir::tensor::ExtractSliceOp>(
+      loc, tensor_type, fullEmpty, offsets, sizes, strides);
 }
 
 // Helper to handle slice insertion with optional type casting
@@ -1793,13 +1841,14 @@ void CodeGenTileLangNPUIRDEV::EmitCopyMemrefToTensor(
       << "dst with dynamic dimension(s) not supported for UB alloc";
 
   mlir::Value base_ub = CreateStaticLocalUB(
-      ub_alloc_shape, src_memref_type_ori.getElementType(), loc);
+      ub_alloc_shape, dst_tensor_type_ori.getElementType(), loc);
 
   // 4) Create ub_view matching copy rank
   mlir::Value ub_view;
   auto ubTy = base_ub.getType().cast<mlir::MemRefType>();
 
   if ((int64_t)copy_sizes.size() == ubTy.getRank()) {
+    // When shape is static and matches alloc shape (offsets are 0), skip subview
     if (OpFoldResultsEqualStaticShape(copy_sizes, ub_alloc_shape)) {
       ub_view = base_ub;
     } else {
@@ -1841,10 +1890,19 @@ void CodeGenTileLangNPUIRDEV::EmitCopyMemrefToTensor(
   mlir::Value loaded_tensor = builder.create<mlir::bufferization::ToTensorOp>(
       loc, ub_view, /*restrict=*/true, /*writable=*/false);
 
-  // 7) Insert slice with optional cast
-  mlir::Value result = InsertSliceWithCast(loaded_tensor, dst, dstR, loc);
+  // 7) Type Cast (skip reshape - let InsertSlice handle rank difference to avoid
+  //    expand_shape failures on strided memrefs from subview)
+  mlir::Value casted_tensor = CreateCastIfTypeMismatch(loaded_tensor, dst);
 
-  // 8) SetVarValue
+  // 8) InsertSlice - tensor.insert_slice can handle source rank < dest rank,
+  //    using dstR.sizes to specify the slice shape in the destination.
+  mlir::Value result = InsertSlice(
+      casted_tensor, dst,
+      const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.offs),
+      const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.sizes),
+      const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.strides));
+
+  // 9) SetVarValue
   SetVarValue(npuirop.dst, result);
 }
 
@@ -1875,25 +1933,20 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToMemref(
   llvm::ArrayRef<mlir::OpFoldResult> copy_sizes = srcC.sizes;
   llvm::ArrayRef<int64_t> copy_projected = srcC.projected;
 
-  // 2) Cast the full source tensor first when element types differ, so backend
-  // vcast always sees a static full tensor instead of a dynamic extract_slice.
-  mlir::Value copy_src = src;
-  if (mlir::getElementTypeOrSelf(src.getType()) !=
-      mlir::getElementTypeOrSelf(dst.getType())) {
-    copy_src = CreateCastIfTypeMismatch(src, dst);
-  }
-
-  // 3) Create rank-reduced tensor.extract_slice from the copy source
+  // 2) Create rank-reduced tensor.extract_slice
   mlir::Value src_slice = CreateRankReducedExtractSlice(
-      copy_src, srcR.offs, srcR.sizes, srcR.strides, copy_projected, loc);
+      src, srcR.offs, srcR.sizes, srcR.strides, copy_projected, loc);
 
-  // 4) Create rank-reduced memref.subview
+  // 3) Create rank-reduced memref.subview
   mlir::Value dst_view = CreateRankReducedSubviewFromBaseRank(
       dst, dstR.offs, dstR.sizes, dstR.strides, copy_projected, loc);
 
+  // 4) Type cast if element types differ
+  mlir::Value casted_tensor = CreateCastIfTypeMismatch(src_slice, dst_view);
+
   // 5) Materialize directly (no reshape needed - shapes match!)
   auto matOp = builder.create<mlir::bufferization::MaterializeInDestinationOp>(
-      loc, src_slice, dst_view);
+      loc, casted_tensor, dst_view);
   matOp.setWritable(true);
 }
 
@@ -1922,8 +1975,13 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToTensor(
   mlir::Value src_slice = CreateRankReducedExtractSlice(
       src, srcR.offs, srcR.sizes, srcR.strides, srcC.projected, loc);
 
-  // Insert slice with optional cast
-  mlir::Value result = InsertSliceWithCast(src_slice, dst, dstR, loc);
+  mlir::Value casted_tensor = CreateCastIfTypeMismatch(src_slice, dst);
+
+  mlir::Value result = InsertSlice(
+      casted_tensor, dst,
+      const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.offs),
+      const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.sizes),
+      const_cast<llvm::SmallVector<mlir::OpFoldResult>&>(dstR.strides));
 
   SetVarValue(npuirop.dst, result);
 }
@@ -1934,59 +1992,57 @@ void CodeGenTileLangNPUIRDEV::EmitCopyTensorToTensor(
  * rank-reduction and dynamic shapes.
  *
  * \details
- * This implementation dispatches based on the source/destination IR types
- * (MemRef vs Tensor) and lowers each case into a small, explicit MLIR sequence.
- * The key design point is that the "canonical copy shape" is derived by
- * dropping static-1 dimensions, enabling rank-reduced `memref.subview` while
- * keeping the user-facing tensor semantics intact via reshape/cast.
+ * This implementation dispatches based on the source/destination IR types (MemRef vs Tensor)
+ * and lowers each case into a small, explicit MLIR sequence. The key design point is that
+ * the "canonical copy shape" is derived by dropping static-1 dimensions, enabling rank-reduced
+ * `memref.subview` while keeping the user-facing tensor semantics intact via reshape/cast.
  *
  * Dispatch cases:
  *
  * 1) Load (MemRef -> Tensor)
  *    - Concept:
- *        Copy from GM (MemRef) into a local UB allocation, then materialize as
- * a Tensor.
+ *        Copy from GM (MemRef) into a local UB allocation, then materialize as a Tensor.
  *    - Rank/Shape Handling:
- *        a) Canonicalize the copy rank by dropping static-1 dims from the
- * source range. b) Create a rank-reduced `memref.subview` of the source GM
- * matching the canonical rank. c) Allocate a static local UB memref using the
- * dst_range shape with static-1s removed; when a dst_range dim is dynamic, use
- * the corresponding dst tensor dim as static upper bound (fallback to full dst
- * shape only when dst has a dynamic dim). d) Create an UB view matching the
- * canonical copy rank; skip subview when alloc shape already matches copy shape
- * (same as GenSubviewFromRegion). e) `memref.copy` from the GM view to the UB
- * view. f) Convert UB to tensor via `bufferization.to_tensor`. g) Cast element
- * type if needed, then directly use `tensor.insert_slice` with dstR.sizes to
- * handle rank differences (avoiding expand_shape on strided memrefs).
+ *        a) Canonicalize the copy rank by dropping static-1 dims from the source range.
+ *        b) Create a rank-reduced `memref.subview` of the source GM matching the canonical rank.
+ *        c) Allocate a static local UB memref using the dst_range shape with static-1s removed;
+ *           when a dst_range dim is dynamic, use the corresponding dst tensor dim as static upper
+ *           bound (fallback to full dst shape only when dst has a dynamic dim).
+ *        d) Create an UB view matching the canonical copy rank; skip subview when alloc shape
+ *           already matches copy shape (same as GenSubviewFromRegion).
+ *        e) `memref.copy` from the GM view to the UB view.
+ *        f) Convert UB to tensor via `bufferization.to_tensor`.
+ *        g) Cast element type if needed, then directly use `tensor.insert_slice` with dstR.sizes
+ *           to handle rank differences (avoiding expand_shape on strided memrefs).
  *
  * 2) Store (Tensor -> MemRef)
  *    - Concept:
  *        Store a tensor slice back to GM.
  *    - Logic:
- *        a) Extract a slice from the source tensor (`tensor.extract_slice`);
- * skip when src range is full and zero-offset. b) Create a destination GM
- * subview (`memref.subview`); skip when dst range is full and zero-offset. c)
- * Resolve potential rank/shape mismatches via reshape, and type mismatches via
- * cast. d) Write using `bufferization.materialize_in_destination` (writable).
+ *        a) Extract a slice from the source tensor (`tensor.extract_slice`); skip when src range
+ *           is full and zero-offset.
+ *        b) Create a destination GM subview (`memref.subview`); skip when dst range is full
+ *           and zero-offset.
+ *        c) Resolve potential rank/shape mismatches via reshape, and type mismatches via cast.
+ *        d) Write using `bufferization.materialize_in_destination` (writable).
  *
  * 3) Copy (Tensor -> Tensor)
  *    - Concept:
- *        Tensor-to-tensor movement / layout manipulation through slice
- * extraction and insertion.
+ *        Tensor-to-tensor movement / layout manipulation through slice extraction and insertion.
  *    - Logic:
- *        a) Extract slice from source (skip when src range is full and
- * zero-offset); destination is used via insert_slice. b) Reshape/cast the
- * source slice to match the destination slice type. c) Insert into destination
- * using `tensor.insert_slice` and update the var binding.
+ *        a) Extract slice from source (skip when src range is full and zero-offset); destination
+ *           is used via insert_slice.
+ *        b) Reshape/cast the source slice to match the destination slice type.
+ *        c) Insert into destination using `tensor.insert_slice` and update the var binding.
  *
  * Example lowering sketch (Load):
  *   Input:  tl.ascend_copy(src_gm[...], dst_tensor[...])
  *   Output:
  *     %src_view = memref.subview %src_gm [...]  : (rank-reduced)
- *     %ub       = memref.alloc()               : (local UB; shape from
- * dst_range; subview may be omitted) memref.copy %src_view, %ub %val      =
- * bufferization.to_tensor %ub %result   = tensor.insert_slice %val into
- * %dst_tensor [...]
+ *     %ub       = memref.alloc()               : (local UB; shape from dst_range; subview may be omitted)
+ *     memref.copy %src_view, %ub
+ *     %val      = bufferization.to_tensor %ub
+ *     %result   = tensor.insert_slice %val into %dst_tensor [...]
  */
 void CodeGenTileLangNPUIRDEV::AscendCopyCodegen(const CallNode *op) {
   tvm::tl::AscendCopy npuirop(op->args, this->vmap);
@@ -2185,13 +2241,15 @@ mlir::Value CodeGenTileLangNPUIRDEV::NeedGenInsertSlice(Buffer buffer_data,
     strides_val.push_back(builder.getI64IntegerAttr(1));
   }
 
-  auto srcType = src.getType().cast<mlir::TensorType>();
-  auto dstType = GetVarValue(buffer_data).getType().cast<mlir::TensorType>();
-  auto elemType = dstType.getElementType();
-  auto srcShape = srcType.getShape();
-
+  auto srcTensorTy = src.getType().cast<mlir::TensorType>();
+  auto dstTensorTy = GetVarValue(buffer_data).getType().cast<mlir::TensorType>();
+  auto elemTy = dstTensorTy.getElementType();
+  auto srcShape = srcTensorTy.getShape();
+  
   auto emptyTensor = builder.create<mlir::tensor::EmptyOp>(
-      builder.getUnknownLoc(), srcShape, elemType);
+      builder.getUnknownLoc(),
+      srcShape,
+      elemTy);
 
   return emptyTensor.getResult();
 }
@@ -4442,7 +4500,6 @@ void CodeGenTileLangNPUIRDEV::AddFunction(const GlobalVar& gvar, const PrimFunc&
     if (!infer.hasVector && infer.hasCube) {
       infer.func_coretype = NPU_CORETYPE::AIC;
     }
-  }
 
     this->func_coretype = infer.func_coretype;  // NPU_CORETYPE::MIX;
     this->requires_simt_indirect_load_ = infer.hasSimtIndirectLoad;

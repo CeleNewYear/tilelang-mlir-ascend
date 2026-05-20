@@ -8,6 +8,6 @@ TileLangIR transforms: transformation passes by dialect.
 - bishengir: adapt_triton_kernel
 """
 
-from . import mlir, tilelangir, bishengir
+from . import mlir, bishengir  # , tilelangir  # a5: tilelangir not supported
 
-__all__ = ["mlir", "tilelangir", "bishengir"]
+__all__ = ["mlir", "bishengir"]  # , "tilelangir"
