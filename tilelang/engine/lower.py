@@ -17,8 +17,9 @@ from tilelang.engine.phase import (
     LowerAndLegalize,
     OptimizeForTarget,
 )
-from tilelang.tladapter import transforms
-from tilelang.tladapter.utils import Pipeline
+# a5: tilelangir native module not available, comment out tladapter usage
+# from tilelang.tladapter import transforms
+# from tilelang.tladapter.utils import Pipeline
 
 
 def is_cpu_device_backend(target: Target):
@@ -278,15 +279,16 @@ def lower(
         if dump_ir:
             print("====== npuir ======")
             print(mlir_str)
-        pipeline = Pipeline()
-        pipeline.add(transforms.mlir.canonicalize, top_down=True)
-        pipeline.add(transforms.bishengir.adapt_triton_kernel)
-        if dump_ir:
-            pipeline.enable_ir_printing()
-        mlir_str = pipeline.run(mlir_str)
-        if dump_ir:
-            print("====== final npuir ======")
-            print(mlir_str)
+        # a5: tilelangir Pipeline not available, skip MLIR pass pipeline
+        # pipeline = Pipeline()
+        # pipeline.add(transforms.mlir.canonicalize, top_down=True)
+        # pipeline.add(transforms.bishengir.adapt_triton_kernel)
+        # if dump_ir:
+        #     pipeline.enable_ir_printing()
+        # mlir_str = pipeline.run(mlir_str)
+        # if dump_ir:
+        #     print("====== final npuir ======")
+        #     print(mlir_str)
         return mlir_str
 
     host_mod = tir.transform.Filter(_is_host_call)(mod)

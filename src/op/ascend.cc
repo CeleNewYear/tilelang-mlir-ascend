@@ -21,6 +21,34 @@ namespace tl {
 
 using namespace tir;
 
+TVM_REGISTER_PASS_CONFIG_OPTION(kEnableAutoMultiBuffer, Bool);
+TVM_REGISTER_PASS_CONFIG_OPTION(kDisableHivmAutoInjectSync, Bool);
+TVM_REGISTER_PASS_CONFIG_OPTION(kEnablePlanAndUpdateBufferAllocation, Bool);
+
+NpuirOperand NpuirOperand::FromExpr(const PrimExpr &expr,
+                                    const BufferMap &vmap) {
+  if (const auto *call = expr.as<CallNode>()) {
+    // CallNode should be a tensor
+    auto region = RegionOp(call->args, vmap);
+    return NpuirOperand::Tensor(region.GetBuffer(), region.GetRanges());
+  }
+  if (expr.as<IntImm>() || expr.as<FloatImm>() || expr.as<tir::VarNode>()) {
+    // If there are other types of nodes that need to be treated as scalars,
+    // please add them here.
+    return NpuirOperand::Scalar(expr);
+  }
+  LOG(FATAL) << "NpuirOperand::FromExpr cannot handle the expr with type of \""
+             << expr->GetTypeKey() << '\"';
+  __builtin_unreachable();
+}
+
+NpuirBinaryOperator::NpuirBinaryOperator(Array<PrimExpr> args, BufferMap vmap) {
+  ICHECK_GE(args.size(), 3U) << "Binary operator expects at least 3 inputs";
+  src0_ = NpuirOperand::FromExpr(args[0], vmap);
+  src1_ = NpuirOperand::FromExpr(args[1], vmap);
+  dst_ = NpuirOperand::FromExpr(args[2], vmap);
+}
+
 namespace {
 
 constexpr const char *kA5IndirectLoadFeature =
@@ -53,39 +81,23 @@ AscendCopy::AscendCopy(Array<PrimExpr> args, BufferMap vmap) : args_(args) {
   std::tie(this->src_range, this->dst_range) = std::tie(rgs[0], rgs[1]);
 }
 
-#define NPUIR_BINARY_OP_CTOR(OPNAME, opname)                                   \
-  Npuir##OPNAME::Npuir##OPNAME(Array<PrimExpr> args, BufferMap vmap) {         \
-    Array<Range> rgs[3];                                                       \
-    Buffer bf[3];                                                              \
-    for (int i = 0; i < 3; i++) {                                              \
-      auto expr = args[i];                                                     \
-      auto call = expr.as<CallNode>();                                         \
-      ICHECK(call);                                                            \
-      auto region = RegionOp(call->args, vmap);                                \
-      rgs[i] = region.GetRanges();                                             \
-      bf[i] = region.GetBuffer();                                              \
-    }                                                                          \
-    std::tie(this->src0, this->src1, this->dst) =                              \
-        std::tie(bf[0], bf[1], bf[2]);                                         \
-    std::tie(this->src0_range, this->src1_range, this->dst_range) =            \
-        std::tie(rgs[0], rgs[1], rgs[2]);                                      \
-  }                                                                            \
+#define NPUIR_BINARY_OP_REGISTER(OPNAME, opname)                               \
   TIR_REGISTER_TL_OP(Npuir##OPNAME, npuir_##opname)                            \
       .set_num_inputs(3)                                                       \
       .set_attr<TCallEffectKind>("TCallEffectKind",                            \
                                  Integer(CallEffectKind::kOpaque));
 
-NPUIR_BINARY_OP_CTOR(Add, add)
-NPUIR_BINARY_OP_CTOR(Sub, sub)
-NPUIR_BINARY_OP_CTOR(Mul, mul)
-NPUIR_BINARY_OP_CTOR(Div, div)
-NPUIR_BINARY_OP_CTOR(Max, max)
-NPUIR_BINARY_OP_CTOR(Min, min)
-NPUIR_BINARY_OP_CTOR(Or, or)
-NPUIR_BINARY_OP_CTOR(And, and)
-NPUIR_BINARY_OP_CTOR(Xor, xor)
-NPUIR_BINARY_OP_CTOR(Pow, pow)
-NPUIR_BINARY_OP_CTOR(Shl, shl)
+NPUIR_BINARY_OP_REGISTER(Add, add)
+NPUIR_BINARY_OP_REGISTER(Sub, sub)
+NPUIR_BINARY_OP_REGISTER(Mul, mul)
+NPUIR_BINARY_OP_REGISTER(Div, div)
+NPUIR_BINARY_OP_REGISTER(Max, max)
+NPUIR_BINARY_OP_REGISTER(Min, min)
+NPUIR_BINARY_OP_REGISTER(Or, or)
+NPUIR_BINARY_OP_REGISTER(And, and)
+NPUIR_BINARY_OP_REGISTER(Xor, xor)
+NPUIR_BINARY_OP_REGISTER(Pow, pow)
+NPUIR_BINARY_OP_REGISTER(Shl, shl)
 
 #define NPUIR_UNARY_OP_CTOR(OPNAME, opname)                                    \
   Npuir##OPNAME::Npuir##OPNAME(Array<PrimExpr> args, BufferMap vmap) {         \

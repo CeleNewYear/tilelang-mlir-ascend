@@ -80,10 +80,8 @@ def allow_vectorize(pass_ctx: Optional[PassContext] = None) -> bool:
 
 
 def need_npuir_bf16_legalize(target: Optional[Target] = None) -> bool:
-    if target is None or target.kind.name != "npuir":
-        return False
-
-    return not supports_native_bf16(get_ascend_device_name())
+    # a5: native bfloat16 is supported, no bf16→fp32 legalization needed
+    return False
 
 
 def LowerAndLegalize(mod: IRModule, target: Target) -> IRModule:

@@ -502,7 +502,7 @@ extern "C" {
 #include "npu_launcher.h"
 #define PY_SSIZE_T_CLEAN
 {"#define __CCE_ENABLE_PRINT__" if need_debug else ""}
-{extract_device_print_code_from_cann() if need_debug else ""}
+{extract_device_print_code_from_cann()}
 
 #define TENSOR_KIND_INPUT 0
 #define TENSOR_KIND_OUTPUT 1
@@ -522,22 +522,14 @@ static void _launch(const char* kernelName, const void* func, rtStream_t stream,
   name.append(kernelName);
   {'auto launch_call = [=]() -> rtError_t' if enable_taskqueue else ''} {{
     uint32_t blockNum = gridX * gridY * gridZ;
-    {
-        "blockNum = std::min(blockNum, (uint32_t)" + str(num_physical_blocks) + ");"
-        if enable_auto_map_parallel_blocks
-        else ""
-    }
-    {
-        "cce::internal::DebugTunnelData *DTData = cce::internal::DebugTunnel::Open(blockNum);"
-        if need_debug
-        else ""
-    }
+    {'blockNum = std::min(blockNum, (uint32_t)' + str(num_physical_blocks) + ');' if enable_auto_map_parallel_blocks else ''}
+    cce::internal::DebugTunnelData *DTData = cce::internal::DebugTunnel::Open(blockNum);
     rtError_t ret;
     {'void *ffts_addr = NULL; uint32_t ffts_len; ret = rtGetC2cCtrlAddr((uint64_t*)&ffts_addr, &ffts_len);' if target_support_ffts else ''}
     {'if (ret != RT_ERROR_NONE) {{ return ret; }}' if (target_support_ffts and enable_taskqueue) else 'if (ret != RT_ERROR_NONE) return;' if (target_support_ffts and (not enable_taskqueue)) else ''}
     // stub argument for workspace
     void *syncBlockLock = NULL;
-
+    void *workspace_addr = NULL;
     uint16_t ModuleId = 0;
     {
         f'''
@@ -1437,12 +1429,11 @@ class compiler_npu:
             so_path = os.path.join(tmpdir, "libkernel.so")
 
             npu_compiler_path = get_npucompiler_path()
-            npu_utils = NPUUtils()
             env_arch = os.getenv("TRITON_ASCEND_ARCH", "")
             if env_arch:
                 target_arch = env_arch
             else:
-                target_arch = npu_utils.get_arch()
+                target_arch = NPUUtils().get_arch()
             # TileLang Ascend JIT Runtime now follows Triton JIT style.
             # bishengir-compile --enable-triton-kernel-compile=true make sure the way.
             _compile_option_list = [
@@ -1468,17 +1459,17 @@ class compiler_npu:
             )
 
             # Handle --disable-hivm-auto-inject-sync option
-            disable_hivm_auto_inject_sync = pass_configs.get(
-                "npuir.disable_hivm_auto_inject_sync",
-                False,  # Default: enabled
-            )
-            _compile_option_list.append(
-                f"--disable-hivm-auto-inject-sync={str(disable_hivm_auto_inject_sync).lower()}"
-            )
+            # disable_hivm_auto_inject_sync = pass_configs.get(
+            #     "npuir.disable_hivm_auto_inject_sync",
+            #     False,  # Default: enabled
+            # )
+            # _compile_option_list.append(
+            #     f"--disable-hivm-auto-inject-sync={str(disable_hivm_auto_inject_sync).lower()}"
+            # )
 
-            _compile_option_list.append("--enable-triton-kernel-compile=true")
+            # _compile_option_list.append("--enable-triton-kernel-compile=true")
 
-            _compile_option_list.append("--enable-hivm-compile=true")
+            # _compile_option_list.append("--enable-hivm-compile=true")
 
             TILELANG_ASCEND_MODE = os.environ.get("TILELANG_ASCEND_MODE")
             if TILELANG_ASCEND_MODE is None or TILELANG_ASCEND_MODE.lower().strip() in [
