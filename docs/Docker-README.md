@@ -6,6 +6,42 @@
 
 此 Dockerfile 基于 Ubuntu 22.04，预装了 TileLang 项目及其依赖，包括 Ascend NPU 支持。容器已预编译 AscendNPU-IR 组件，并优化了镜像大小以便导出为 tar 文件。
 
+## 组件依赖
+
+容器基于 `quay.io/ascend/cann:8.5.0-a3-ubuntu22.04-py3.11` 构建，预装以下组件：
+
+### 系统工具
+
+`bash` `ca-certificates` `curl` `git` `gnupg2` `make` `sudo` `unzip` `vim` `wget`
+
+### 编译工具链
+
+| 组件 | 版本 / 说明 |
+|------|-------------|
+| Clang | 15（默认编译器） |
+| LLD | 15（默认链接器） |
+| CMake | latest（通过 Kitware 源安装） |
+| ccache | 编译缓存加速 |
+| zlib1g-dev | 压缩库 |
+| libzstd-dev | Zstandard 压缩库 |
+| Ninja | ≥1.12.0 |
+
+### Python 环境
+
+| 组件 | 版本 |
+|------|------|
+| Python | 3.11 |
+| PyTorch | 2.7.1 (CPU) |
+| torch_npu | 2.7.1 |
+| TileLang | 源码编译安装 |
+| AscendNPU-IR | 预编译（`/build/AscendNPU-IR/build/`） |
+| 其他依赖 | 来自 `requirements.txt` + `requirements-dev.txt` |
+
+### NPU 运行时
+
+- **CANN**: 8.5.0（基础镜像内置）
+- **AscendNPU-IR**: 预编译二进制
+
 ## 构建镜像
 
 ### 默认构建（中国大陆用户）
