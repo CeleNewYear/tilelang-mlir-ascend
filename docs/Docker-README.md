@@ -95,7 +95,7 @@ docker exec -it <container_name_or_id> bash
 ### 预编译组件
 
 - **AscendNPU-IR**: 已预编译并存储在 `/build/AscendNPU-IR/build/`
-- **TileLang**: 已在`~/.bashrc`通过`export PYTHONPATH=/root/tilelang-mlir-ascend:$PYTHONPATH` 配置，可直接 `import tilelang`
+- **TileLang**: 已在`~/.bashrc`通过`PYTHONPATH` 配置，可直接 `import tilelang`
 
 ### 加速优化
 
