@@ -41,7 +41,7 @@ docker run -it --rm tilelang-ascend
 ```shell
 Welcome to TileLang AscendNPU IR Docker container!
 
-TileLang URL: https://github.com/tile-ai/tilelang-ascend/tree/npuir
+TileLang URL: https://github.com/tile-ai/tilelang-mlir-ascend
 
 Pre-compiled AscendNPU-IR binaries are available at /build/AscendNPU-IR/build/
 To reinstall or update NPU IR with pre-compiled binaries (faster), use:
@@ -54,30 +54,33 @@ To reinstall or update NPU IR with pre-compiled binaries (faster), use:
 docker exec -it <container_name_or_id> bash
 ```
 
-### 挂载工作目录
-
-```bash
-docker run -it --rm -v $(pwd):/workspace tilelang-ascend
-```
-
 ## 容器特性
 
 ### 预编译组件
 
 - **AscendNPU-IR**: 已预编译并存储在 `/build/AscendNPU-IR/build/`
-- **TileLang**: 已安装到 Python 环境中（Python 3.9/3.10/3.11）
-
-### 环境配置
-
-- **用户**: `tilelang`
-- **工作目录**: `/home/tilelang`
-- **时区**: Asia/Shanghai
-- **Python**: 默认 Python 3.11（根据 base image 的 PY_VERSION 参数），同时支持 Python 3.9/3.10/3.11 多版本
+- **TileLang**: 已在`~/.bashrc`通过`export PYTHONPATH=/root/tilelang-mlir-ascend:$PYTHONPATH` 配置，可直接 `import tilelang`
 
 ### 加速优化
 
 - **Git 镜像**: 中国大陆默认使用清华镜像加速子模块下载
 - **编译缓存**: 预编译二进制文件可复用，避免重复编译
+
+## 使用预构建镜像（推荐）
+
+TileLang Ascend 在 Ascend 官方镜像仓库中提供预构建的 Docker 镜像，用户可直接拉取使用，无需本地编译：
+
+- **镜像仓库地址**：[https://quay.io/repository/ascend/tilelang](https://quay.io/repository/ascend/tilelang)
+
+```bash
+# 拉取最新镜像
+docker pull quay.io/ascend/tilelang:latest
+
+# 运行容器
+docker run -it --rm quay.io/ascend/tilelang:latest
+```
+
+您可以在仓库页面选择所需的 tag（如特定 CPU 型号、Ascend 芯片型号等）进行拉取。
 
 ## 使用示例
 
@@ -88,22 +91,12 @@ docker run -it --rm -v $(pwd):/workspace tilelang-ascend
 python -c "import tilelang; print('TileLang imported successfully')"
 ```
 
-### 2. 重新安装 NPU IR（使用预编译）
+### 2. 开发者源码开发
 
 ```bash
 cd tilelang-ascend
+# 修改代码后重新编译
 bash install_npuir.sh --bishengir-path=/build/AscendNPU-IR/build/install
-```
-
-### 3. 开发工作流
-
-```bash
-# 挂载代码目录
-docker run -it --rm -v /path/to/your/code:/workspace tilelang-ascend
-
-# 在容器内
-cd /workspace
-# 开始开发...
 ```
 
 ## 构建参数
@@ -119,17 +112,12 @@ cd /workspace
 ### 构建失败
 
 - 检查网络连接（特别是 Git 子模块下载）
-- 确认系统支持 Docker 和 Ascend 环境
+- 确认系统支持 Docker 环境
 
 ### 运行时问题
 
 - 确保主机有 Ascend 设备访问权限
 - 检查 Python 版本兼容性
-
-### 性能优化
-
-- 使用预编译二进制文件可显著减少安装时间
-- 考虑使用 Docker layer 缓存加速重建
 
 ## 贡献
 
