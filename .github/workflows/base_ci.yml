@@ -43,6 +43,14 @@ jobs:
         python -m pre_commit run --files $(tr '\n' ' ' < /tmp/changed_files.txt)
 
   # ============================================================
+  # Doc link check (PR only, after format passes)
+  # ============================================================
+  doc-link-check:
+    if: github.event_name == 'pull_request' && needs.format.result == 'success'
+    needs: format
+    uses: ./.github/workflows/doc-link-check.yml
+
+  # ============================================================
   # Prebuild: AscendNPU-IR (x64 + arm64)
   # ============================================================
   prebuild-npuir:
