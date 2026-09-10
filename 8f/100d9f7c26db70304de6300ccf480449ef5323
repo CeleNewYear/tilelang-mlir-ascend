@@ -1,0 +1,28 @@
+tilelang/jit/jit_npu.py
+  s_48d8e3d707ad3a::t_0c258f431b3a32 62-82,752-768,791,805-809,825-829,844-849,930,1310-1314,1320
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "8f100d9f7c26db70304de6300ccf480449ef5323",
+  "prompts": {},
+  "sessions": {
+    "s_48d8e3d707ad3a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a3c955d41a55028fabf7ed7",
+        "model": "glm-5.1__dev"
+      },
+      "human_author": "CeleNewYear <1402759843@qq.com>",
+      "custom_attributes": {
+        "tool_name": "RunCommand",
+        "edit_kind": "bash",
+        "external_session_id": "6a3c955d41a55028fabf7ed7",
+        "display_model_name": "GLM-5.1",
+        "operation_id": "6aa26f05f90c83774b6de026",
+        "session_id": "6a3c955d41a55028fabf7ed7",
+        "tool_use_id": "6aa26f05f90c83774b6de026"
+      }
+    }
+  }
+}
