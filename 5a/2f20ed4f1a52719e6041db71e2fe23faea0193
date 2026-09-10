@@ -1,0 +1,28 @@
+tilelang/utils/npu_utils.py
+  s_48d8e3d707ad3a::t_6748fd72a078ef 63,66-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "5a2f20ed4f1a52719e6041db71e2fe23faea0193",
+  "prompts": {},
+  "sessions": {
+    "s_48d8e3d707ad3a": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a3c955d41a55028fabf7ed7",
+        "model": "glm-5.1__dev"
+      },
+      "human_author": "CeleNewYear <1402759843@qq.com>",
+      "custom_attributes": {
+        "edit_kind": "bash",
+        "operation_id": "6aa2d2d73f6568c185608f5d",
+        "external_session_id": "6a3c955d41a55028fabf7ed7",
+        "tool_name": "RunCommand",
+        "session_id": "6a3c955d41a55028fabf7ed7",
+        "tool_use_id": "6aa2d2d73f6568c185608f5d",
+        "display_model_name": "GLM-5.1"
+      }
+    }
+  }
+}
