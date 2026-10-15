@@ -1,12 +1,74 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026.
 """Argmax/argmin first-occurrence reduction kernel (NPU, Developer mode).
 
+Experimental copy of ``perf_opt/_argreduce_kernel.py``. The N-split path
+fuses partial reduction and final merge into one device launch; the original
+``perf_opt`` implementation is intentionally left unchanged for A/B testing.
+
 ROUND-6 VERSION (``_argreduce_kernel_r6``): current best (rounds 1-4) plus
 two later vectorization fixes -- the r5 vectorized int64 epilogue
 (``T.reshape`` + ``T.vcast``) and the r6 in-kernel idx construction
 (1-D ``T.arange`` -> ``T.reshape`` -> ``T.vbrc``, replacing the round-4 FIX
 GM idx input). Call contract back to ``main(x) -> out`` for the resident
 path (no host-side idx tensor injection).
+
+ROUND-7 VERSION (nsplit fused rewrite, 2026-10-13): the fused single-launch
+nsplit kernel is rebuilt on the probe-verified expert-mode sub-block path
+(logs/round5/probes/probe_blockdim40.py minimal implementation). The old
+r6 fused form launched ``T.Kernel(vector_cores=48)`` with ``(cid, _)``:
+the inter-block ``T.block_barrier`` FFTS handshake only completes through
+the mix launch path with a single-wave grid (<= aicore_num = 24 blocks on
+910B2C), so that form is rejected by the launcher guard (48 > 24) and any
+<= 24-block variant without sub-block awareness makes the two V cores of
+each AI core execute the SAME block body (duplicated partial work). The
+r7 form:
+    R7-a: the nsplit fused kernel alone is compiled under
+        ``TILELANG_ASCEND_MODE=expert`` (env switched around the jit call;
+        every other path in this file stays Developer mode, unchanged).
+        Expert form: ``T.Scope("Vector")`` + ``T.alloc_ub`` buffers (pure
+        vector, auto-promoted to MIX: empty ``_mix_aic`` stub + full
+        ``_mix_aiv`` body, probe_blockdim40.py evidence).
+    R7-b: 1-to-2 sub-core split ("1 fen 2"): ``T.Kernel(num_blocks) as
+        (cid, subid)`` with ``num_blocks = ceil(nchunk / 2) <= 24``; the
+        flattened V-core lane ``vid = cid * 2 + subid`` owns chunks
+        ``vid + s * (2 * num_blocks)`` (grid-stride). Each AI core's two
+        V cores process DIFFERENT chunks instead of duplicating one.
+        Probe evidence: blockdim40 (NC=24) ws == 2x exact -- both subid
+        lanes execute with distinct work; subid is get_sub_block_idx
+        (hardware V-core id in {0,1}), NOT a third grid dim.
+    R7-c: merge restructured to drop ``T.transpose`` (the old
+        ``_merge_workspace`` macro): core (cid==0, subid==0) reads the
+        chunk-major ``(nchunk, M)`` workspace contiguously and reduces
+        over dim 0 (doc-legal: docs/Tilelang.language/规约操作/T.reduce.md
+        2.2.2 shape rule) + ``T.vbrc`` row broadcast (1, M) -> (nchunk, M)
+        (docs/Tilelang.language/shape操作/T.vbrc.md 2.2.2). Cross-subid
+        barrier freshness probe-verified (odd-vid chunk extremes, late-
+        chunk duplicates, randn sweeps; 0 failures).
+    R7-d: partial-phase candidate construction switched from the fused
+        ``T.Parallel + if_then_else`` loop (the r3e "tiled-path-proven
+        form") to the explicit ``T.vcmp + T.vselect`` chain with manually
+        hoisted task-invariant operands (r6 1-D arange -> reshape idx
+        matrix + BIG sentinel vbrc, built once per lane). The expert
+        pipeline has no LICM (--disable-hivm-tensor-compile, mandatory
+        for the mix pre-split form), so the fused-ite lowered to
+        varange+vcast+vbrc(sentinel) INSIDE the row loop -- 3 extra
+        tn-wide vector passes per row on the serialized chain. Isolated
+        partial A/B: fused-ite 17.126us vs chain+hoist 5.952us (2.88x;
+        per-lane scalar pipe 12-13us -> 1.3-1.9us). Evidence:
+        /home/tilelang/l00970450/upload/data/1013 (IR diff + msprof).
+    R7-e (2026-10-14, data/1014 report integration): the final_sweep
+        tunables are wired into the framework entries -- ``_nsplit_config``
+        gains a ``tn`` override and a CALIBRATED default rule (largest tn
+        with nchunk in [vector_cores//3, vector_cores//2]; chain-form
+        sweep: tn 2560/3200/5120/6400/10240 -> 12.73/11.62/10.14/10.23/
+        10.58us, optimum tn=5120 = 1.20x over the r3e pick and over the
+        dual-kernel baseline), ``_build_nsplit_fused``/``build_nsplit``/
+        ``build_case`` gain ``num_blocks``; ``build_case`` routes its
+        ``tile_n`` to the nsplit tn; ``--tn``/``--blocks`` CLI flags let
+        ``--level nsplit`` precision-gate any config. The calibrated
+        default IS the shipped configuration (no env switches). Full
+        r7-d/r7-e results: /home/tilelang/l00970450/upload/data/1014/report.md.
+
 
 Migrated from the GPU TileOPs ``_argreduce_kernel`` (ArgmaxFwdOp) to
 ``target="npuir"``.
@@ -987,27 +1049,29 @@ def _build_tiled(M, N, op_kind, dtype, work_dtype, vector_cores, tile_n):
 # ---------------------------------------------------------------------------
 # Factory (harness contract: _argreduce_kernel(M, N, op_kind, dtype) -> _func(block_m))
 # ---------------------------------------------------------------------------
-def _build_nsplit_dispatch(M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk):
-    """C6 composition: factory contract preserved, dual launch inside.
+def _build_nsplit_dispatch(
+    M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk, num_blocks=None
+):
+    """C6 composition: factory contract preserved, one fused launch (r7).
 
     Returns ``_func(block_m) -> main(x) -> out``; main allocates the
-    (nchunk*M,) flat workspace per call (torch.empty, host-side) and
-    launches partial then merge (prev-task round9 form: harness bench +
-    golden PASS proven; the wrapper still sees a single callable).
+    ``(nchunk, M)`` workspace per call (torch.empty, host-side) and launches
+    one kernel. Every V-core lane (r7-b: ``vid = cid * 2 + subid``) writes
+    its partial result, all lanes of all blocks meet at the inter-block
+    barrier (single-wave grid), and lane 0 performs the final merge.
     """
-    partial = _build_nsplit_partial(M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk)(M)
-    merge = _build_nsplit_merge(M, N, op_kind, dtype, work_dtype, tn, nchunk)()
-    ws_elems = nchunk * M
+    fused = _build_nsplit_fused(
+        M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk, num_blocks
+    )(M)
     val_torch_dtype = _DTYPE_MAP[work_dtype]
 
     def _func(block_m):
         # block_m accepted for interface uniformity (nsplit uses bm = M).
 
         def main(x):
-            ws_val = torch.empty(ws_elems, dtype=val_torch_dtype, device=x.device)
-            ws_idx = torch.empty(ws_elems, dtype=torch.float32, device=x.device)
-            partial(x, ws_val, ws_idx)
-            return merge(ws_val, ws_idx)
+            ws_val = torch.empty((nchunk, M), dtype=val_torch_dtype, device=x.device)
+            ws_idx = torch.empty((nchunk, M), dtype=torch.float32, device=x.device)
+            return fused(x, ws_val, ws_idx)
 
         return main
 
@@ -1050,11 +1114,9 @@ def _argreduce_kernel(M, N, op_kind, dtype):
             ncfg["tn"],
             ncfg["nchunk"],
         )
-        # msprof anchor: dual-launch dispatch -- anchor the dominant
-        # partial kernel (Stage 4: partial ~8.4us + merge ~3.3us). The
-        # wrapper lifts this to the Op level (tier-2/3 resolution in
-        # tileops.benchmark.msprof).
-        _f.msprof_kernel_name = "argreduce_partial"
+        # The N-split path is now one device launch; the profiler anchor
+        # therefore names the complete operation rather than one phase.
+        _f.msprof_kernel_name = "argreduce_nsplit_fused"
         return _f
 
     if cfg["path"] == "narrow":
@@ -1302,9 +1364,21 @@ def run_boundary():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--level", default="L0", choices=["L0", "all", "nsplit"])
+    parser.add_argument(
+        "--tn",
+        type=int,
+        default=None,
+        help="nsplit chunk-width override (precision-gates the A/B config)",
+    )
+    parser.add_argument(
+        "--blocks",
+        type=int,
+        default=None,
+        help="nsplit AI-core block-count override (single-wave limit 24)",
+    )
     args, _ = parser.parse_known_args()
     if args.level == "nsplit":
-        run_nsplit_L0()
+        run_nsplit_L0(tn=args.tn, num_blocks=args.blocks)
     elif args.level == "L0":
         run_L0()
     else:
@@ -1316,7 +1390,7 @@ def main():
 
 
 # ---------------------------------------------------------------------------
-# ROUND-3-A: C6 N-split partial+merge (DESIGN.md section 1.6.4 A/B adjudication)
+# C6 N-split fused partial+merge experiment
 # ---------------------------------------------------------------------------
 # Dispatch predicate (DESIGN.md 1.6.4-(1)): M <= 16, ceildiv(M, 1) < 48
 # vector cores, N >= 32768 (lm-head class; the single-kernel tiled path is
@@ -1335,7 +1409,7 @@ _NSPLIT_CHAIN_B = {"float16": 17, "bfloat16": 23, "float32": 21}
 _NSPLIT_MANUAL_CAP = 139264
 
 
-def _nsplit_config(M, N, dtype, vector_cores):
+def _nsplit_config(M, N, dtype, vector_cores, tn=None):
     """C6 dispatch predicate + (tn, nchunk) derivation (DESIGN.md 1.6.4).
 
     Returns ``{"tn", "nchunk"}`` or None when the shape should stay on the
@@ -1344,12 +1418,25 @@ def _nsplit_config(M, N, dtype, vector_cores):
     single kernel is forced to bm=1 by trap C-5 and leaves M/48 cores
     utilized).
 
-    tn rule (r3e sweep, fp16 tn in {1280,2048,2560,5120} -> partial
-    11.94/11.32/8.58/11.34us): pick the largest nchunk = N/tn that stays
-    single-wave (nchunk <= vector_cores) -- tn ascending scan over
-    256-multiples, first divisor hit wins (fp16 (4,102400): tn=2560,
-    nchunk=40). Manual budget = per-row buffers reused across the M rows:
-    tn * B_row(dtype) (+ tiny (M,) staging), B_row = x_r + w_r + e_r + c_r.
+    tn rules:
+
+    - ``tn`` argument (R7-e): explicit override -- only divisibility and
+      the manual-bytes budget are validated (``build_case`` routes its
+      ``tile_n`` here; the ``--tn`` CLI feeds ``run_nsplit_L0``).
+
+    - default (R7-e calibrated, supersedes the r3e rule): with the r7-d
+      chain-form partial the kernel is fixed-overhead dominated (barrier
+      rendezvous + merge + per-lane chain latency), so FEWER, LARGER
+      chunks win: prefer the largest tn whose nchunk lands in the window
+      [vector_cores//3, vector_cores//2] (= [16, 24] lanes on 910B2C).
+      Full sweep (data/1014 report section 4.1, (4,102400) fp16 chain):
+      tn 2560/3200/5120/6400/10240 (nc 40/32/20/16/10) -> 12.73/11.62/
+      10.14/10.23/10.58us -- optimum tn=5120 (nc=20, 10 blocks/20 lanes),
+      1.20x faster than the r3e pick (tn=2560, 12.73us) and 1.20x faster
+      than the dual-kernel baseline. Falls back to the r3e ascending scan
+      (first divisor with 2 <= nc <= max_nc) when no divisor hits the
+      window. Manual budget: tn * B_row(dtype), B_row = x_r + w_r + e_r
+      + chain operands.
     """
     B_row = {"float16": 10, "bfloat16": 14, "float32": 16}.get(dtype)
     if B_row is None:
@@ -1361,6 +1448,33 @@ def _nsplit_config(M, N, dtype, vector_cores):
     max_nc = min(vector_cores, N // 256, _NSPLIT_MERGE_ELEMS // M)
     if max_nc < 2:
         return None
+    if tn is not None:
+        if N % tn != 0:
+            return None
+        nc = N // tn
+        if nc < 2 or nc > max_nc or tn * B_row > _NSPLIT_MANUAL_CAP:
+            return None
+        return {"tn": tn, "nchunk": nc}
+    # R7-e calibrated rule: largest tn with nchunk in the window
+    # [vector_cores//3, min(max_nc, vector_cores//2)].
+    nc_lo = max(2, vector_cores // 3)
+    nc_hi = min(max_nc, vector_cores // 2)
+    if nc_lo <= nc_hi:
+        best = None
+        tn_scan = 256
+        while tn_scan * 2 <= N:
+            if N % tn_scan == 0:
+                nc = N // tn_scan
+                if (
+                    nc_lo <= nc <= nc_hi
+                    and tn_scan * B_row <= _NSPLIT_MANUAL_CAP
+                    and (best is None or tn_scan > best[0])
+                ):
+                    best = (tn_scan, nc)
+            tn_scan += 256
+        if best is not None:
+            return {"tn": best[0], "nchunk": best[1]}
+    # r3e fallback: ascending scan, first divisor with 2 <= nc <= max_nc.
     tn = 256
     while tn * 2 <= N:
         if N % tn == 0:
@@ -1371,46 +1485,107 @@ def _nsplit_config(M, N, dtype, vector_cores):
     return None
 
 
-def _build_nsplit_partial(M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk):
-    """ROUND-3-E partial kernel (per-row form): all-(1,tn) tiled-path shapes.
+def _build_nsplit_fused(
+    M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk, num_blocks=None
+):
+    """Fused N-split kernel (r7): expert mode, sub-block 1-to-2 split.
 
-    Fix vs r3d: the (M, tn) 2D strided column-block GM read (4 row segments
-    at 204KB stride, per chunk) runs at ~1 GB/s/core effective (r3d floor
-    ~14us regardless of tn; gm_to_ub_bw 0.8-1.1 GB/s vs the tiled path's
-    7.6 GB/s on contiguous (1, 5120) tiles). Restructured to per-row
-    (1, tn) contiguous reads + per-row (1, tn) compute -- every op shape is
-    the tiled-path-proven form (copy/vbrc/fused-ite/reduce on (1, tn)),
-    unrolled over the M rows at trace time (M <= 16 by the dispatch
-    predicate). ws writes stay flat contiguous (chunk-major, r3d form).
+    Launch topology (R7-e: ``num_blocks`` overridable): default
+    ``num_blocks = ceil(nchunk / 2)`` AI-core blocks (clamped to
+    aicore_num; nchunk <= vector_cores = 2 * aicore_num keeps this <=
+    aicore_num, satisfying the single-wave FFTS limit of T.block_barrier).
+    An explicit ``num_blocks`` (``--blocks`` CLI / ``build_case`` /
+    ``build_nsplit`` argument) is clamped to [1, aicore_num]; lanes then cover the chunks by grid-stride
+    (``ceil(nchunk / (2 * num_blocks))`` tasks per lane). Measured
+    sensitivity (data/1014 section 4.2): fewer lanes than chunks
+    (multi-chunk lanes) degrades proportionally; more lanes than chunks
+    are idle -- 1 chunk per lane with the largest viable chunk is optimal.
+
+    The partial phase keeps the r3e per-row (1, tn) form (contiguous GM
+    reads, every op the tiled-path-proven shape). The merge runs on lane 0
+    only: contiguous (nchunk, M) workspace read + dim-0 reduces -- no
+    transpose (r7-c). All buffers are T.alloc_ub inside T.Scope("Vector")
+    (expert pure-vector form; auto-promoted to MIX so the inter-block
+    barrier's FFTS handshake completes -- probe_blockdim40.py evidence).
+
+    Compiled under ``TILELANG_ASCEND_MODE=expert`` regardless of the
+    module-level Developer default: the env is switched around the jit
+    call and restored, so every other path of this file is unaffected.
     """
-    num_kernels = min(nchunk, vector_cores)
-    num_local_tasks = _ceildiv(nchunk, num_kernels)
+    if num_blocks is None:
+        num_blocks = _ceildiv(nchunk, 2)
+    aicore_num = NPUUtils.get().get_aicore_num()
+    if not 1 <= num_blocks <= aicore_num:
+        raise ValueError(
+            f"num_blocks={num_blocks} out of range [1, {aicore_num}] "
+            f"(single-wave FFTS limit of T.block_barrier)"
+        )
+    num_vcores = num_blocks * 2
+    num_local_tasks = _ceildiv(nchunk, num_vcores)
     is_bf16 = dtype == "bfloat16"
 
-    @tilelang.jit(target="npuir")  # out_idx=None: side-effect kernel (ws out)
-    def _partial(block_m):
+    @tilelang.jit(out_idx=[3], target="npuir")
+    def _fused_jit(block_m):
         # block_m accepted for interface uniformity; must equal M.
 
         if is_bf16:
 
             @T.prim_func
-            def argreduce_partial(
+            def argreduce_nsplit_fused(
                 x: T.Tensor((M, N), dtype),
-                ws_val: T.Tensor((nchunk * M,), work_dtype),
-                ws_idx: T.Tensor((nchunk * M,), "float32"),
+                ws_val: T.Tensor((nchunk, M), work_dtype),
+                ws_idx: T.Tensor((nchunk, M), "float32"),
+                out: T.Tensor((M,), "int64"),
             ):
-                with T.Kernel(num_kernels, is_npu=True) as (cid, _):
-                    x_r = T.alloc_shared((1, tn), dtype)
-                    w_r = T.alloc_fragment((1, tn), "float32")
-                    m_r = T.alloc_fragment((1, 1), "float32")
-                    e_r = T.alloc_fragment((1, tn), "float32")
-                    c_r = T.alloc_fragment((1, tn), "float32")
-                    f_r = T.alloc_fragment((1, 1), "float32")
-                    ext_out = T.alloc_shared((M,), work_dtype)
-                    gidx_out = T.alloc_shared((M,), "float32")
+                with T.Kernel(num_blocks, is_npu=True) as (cid, subid), T.Scope("Vector"):
+                    # Partial-phase buffers (every V core lane).
+                    x_r = T.alloc_ub((1, tn), dtype)
+                    w_r = T.alloc_ub((1, tn), "float32")
+                    m_r = T.alloc_ub((1, 1), "float32")
+                    e_r = T.alloc_ub((1, tn), "float32")
+                    f_r = T.alloc_ub((1, 1), "float32")
+                    ext_out = T.alloc_ub((M,), "float32")
+                    gidx_out = T.alloc_ub((M,), "float32")
+                    # r7-d chain-form operands (see the non-bf16 variant
+                    # note below for why the fused-ite form is gone).
+                    p_idx_src = T.alloc_ub((tn,), "float32")
+                    p_idx_j = T.alloc_ub((1, tn), "float32")
+                    p_sent_v = T.alloc_ub((1, tn), "float32")
+                    p_cmp = T.alloc_ub((1, tn), "bool")
+                    p_cand = T.alloc_ub((1, tn), "float32")
 
+                    # Merge buffers. TVM tracing requires allocations
+                    # to dominate the runtime conditional, so every
+                    # lane declares them; only lane vid==0 executes
+                    # the merge below.
+                    val_ub = T.alloc_ub((nchunk, M), "float32")
+                    idx_ub = T.alloc_ub((nchunk, M), "float32")
+                    g = T.alloc_ub((1, M), "float32")
+                    g_brc = T.alloc_ub((nchunk, M), "float32")
+                    cmp_eq = T.alloc_ub((nchunk, M), "bool")
+                    sent_v = T.alloc_ub((nchunk, M), "float32")
+                    cand = T.alloc_ub((nchunk, M), "float32")
+                    first = T.alloc_ub((1, M), "float32")
+                    first_flat = T.alloc_ub((M,), "float32")
+                    out_ub = T.alloc_ub((M,), "int64")
+
+                    # r7-d: task-invariant chain operands built ONCE per
+                    # lane (manual LICM -- the expert pipeline has none:
+                    # the old fused-ite form lowered to varange+vcast+
+                    # vbrc(sentinel) INSIDE the row loop, 3 extra
+                    # 2560-wide passes per row; chain+hoist measured
+                    # 17.13 -> 5.95us on the isolated partial).
+                    T.arange(p_idx_src, [1], 0)
+                    T.reshape(p_idx_src, p_idx_j)
+                    T.vbrc(T.float32(BIG), p_sent_v)
+
+                    # r7-b: flatten (block, sub-block) -> V-core lane.
+                    # subid is get_sub_block_idx (the hardware V-core
+                    # id in {0,1} of this AI core), so vid enumerates
+                    # all 2*num_blocks V cores exactly once.
+                    vid = cid * 2 + subid
                     for s in T.serial(num_local_tasks):
-                        c = cid + s * num_kernels
+                        c = vid + s * num_vcores
                         if c < nchunk:
                             for r in range(M):
                                 T.copy(x[r : r + 1, c * tn : (c + 1) * tn], x_r)
@@ -1420,38 +1595,94 @@ def _build_nsplit_partial(M, N, op_kind, dtype, work_dtype, vector_cores, tn, nc
                                 else:
                                     T.reduce_min(w_r, m_r, dim=1)
                                 T.vbrc(m_r, e_r)
-                                for i, j in T.Parallel(1, tn):
-                                    c_r[i, j] = T.if_then_else(
-                                        w_r[i, j] == e_r[i, j],
-                                        T.cast(j, "float32"),
-                                        T.float32(BIG),
-                                    )
-                                T.reduce_min(c_r, f_r, dim=1)
+                                T.vcmp(w_r, e_r, p_cmp, "eq")
+                                T.vselect(p_cmp, p_idx_j, p_sent_v, p_cand)
+                                T.reduce_min(p_cand, f_r, dim=1)
                                 ext_out[r] = m_r[0, 0]
                                 gidx_out[r] = T.cast(c * tn, "float32") + f_r[0, 0]
-                            T.copy(ext_out[0:M], ws_val[c * M : (c + 1) * M])
-                            T.copy(gidx_out[0:M], ws_idx[c * M : (c + 1) * M])
+                            with T.rs("PIPE_MTE3"):
+                                T.copy(ext_out[0:M], ws_val[c, 0:M])
+                                T.copy(gidx_out[0:M], ws_idx[c, 0:M])
+
+                    # Inter-block barrier: all lanes of all blocks
+                    # rendezvous (single-wave grid <= aicore_num).
+                    with T.rs("PIPE_MTE3"):
+                        T.block_barrier(0)
+
+                    # r7-c: merge on lane 0, dim-0 reduces, no
+                    # transpose.
+                    if vid == 0:
+                        T.vbrc(T.float32(BIG), sent_v)
+                        T.copy(ws_val, val_ub)
+                        T.copy(ws_idx, idx_ub)
+                        if op_kind == "argmax":
+                            T.reduce_max(val_ub, g, dim=0)
+                        else:
+                            T.reduce_min(val_ub, g, dim=0)
+                        T.vbrc(g, g_brc)
+                        T.vcmp(val_ub, g_brc, cmp_eq, "eq")
+                        T.vselect(cmp_eq, idx_ub, sent_v, cand)
+                        T.reduce_min(cand, first, dim=0)
+                        T.reshape(first, first_flat)
+                        T.vcast(first_flat, out_ub, round_mode="rint")
+                        T.copy(out_ub[0:M], out[0:M])
 
         else:
 
             @T.prim_func
-            def argreduce_partial(
+            def argreduce_nsplit_fused(
                 x: T.Tensor((M, N), dtype),
-                ws_val: T.Tensor((nchunk * M,), dtype),
-                ws_idx: T.Tensor((nchunk * M,), "float32"),
+                ws_val: T.Tensor((nchunk, M), dtype),
+                ws_idx: T.Tensor((nchunk, M), "float32"),
+                out: T.Tensor((M,), "int64"),
             ):
-                with T.Kernel(num_kernels, is_npu=True) as (cid, _):
-                    x_r = T.alloc_shared((1, tn), dtype)
-                    w_r = T.alloc_fragment((1, tn), dtype)
-                    m_r = T.alloc_fragment((1, 1), dtype)
-                    e_r = T.alloc_fragment((1, tn), dtype)
-                    c_r = T.alloc_fragment((1, tn), "float32")
-                    f_r = T.alloc_fragment((1, 1), "float32")
-                    ext_out = T.alloc_shared((M,), dtype)
-                    gidx_out = T.alloc_shared((M,), "float32")
+                with T.Kernel(num_blocks, is_npu=True) as (cid, subid), T.Scope("Vector"):
+                    x_r = T.alloc_ub((1, tn), dtype)
+                    w_r = T.alloc_ub((1, tn), dtype)
+                    m_r = T.alloc_ub((1, 1), dtype)
+                    e_r = T.alloc_ub((1, tn), dtype)
+                    f_r = T.alloc_ub((1, 1), "float32")
+                    ext_out = T.alloc_ub((M,), dtype)
+                    gidx_out = T.alloc_ub((M,), "float32")
+                    # r7-d chain-form operands (see note below).
+                    p_idx_src = T.alloc_ub((tn,), "float32")
+                    p_idx_j = T.alloc_ub((1, tn), "float32")
+                    p_sent_v = T.alloc_ub((1, tn), "float32")
+                    p_cmp = T.alloc_ub((1, tn), "bool")
+                    p_cand = T.alloc_ub((1, tn), "float32")
 
+                    val_ub = T.alloc_ub((nchunk, M), dtype)
+                    idx_ub = T.alloc_ub((nchunk, M), "float32")
+                    g = T.alloc_ub((1, M), dtype)
+                    g_brc = T.alloc_ub((nchunk, M), dtype)
+                    cmp_eq = T.alloc_ub((nchunk, M), "bool")
+                    sent_v = T.alloc_ub((nchunk, M), "float32")
+                    cand = T.alloc_ub((nchunk, M), "float32")
+                    first = T.alloc_ub((1, M), "float32")
+                    first_flat = T.alloc_ub((M,), "float32")
+                    out_ub = T.alloc_ub((M,), "int64")
+
+                    # r7-d: the fused-ite candidate loop is replaced by the
+                    # explicit vcmp+vselect chain with manually hoisted
+                    # task-invariant operands (idx matrix + BIG sentinel,
+                    # built once per lane). Rationale: the expert pipeline
+                    # (--disable-hivm-tensor-compile, mandatory for the mix
+                    # pre-split form) runs no LICM -- NpuLoopVectorize
+                    # lowers the fused-ite to varange+vcast+vbrc(sentinel)
+                    # INSIDE the row loop, 3 extra tn-wide vector passes per
+                    # row on the serialized chain. Isolated-partial A/B
+                    # (2026-10-13, /home/tilelang/l00970450/upload/data/1013):
+                    # fused-ite 17.126us vs chain+hoist 5.952us (2.88x);
+                    # per-lane scalar pipe 12-13us -> 1.3-1.9us. The
+                    # r6 1-D arange + reshape form is used for the idx
+                    # matrix (C-9/C-10 traps); same-shape vbrc avoided.
+                    T.arange(p_idx_src, [1], 0)
+                    T.reshape(p_idx_src, p_idx_j)
+                    T.vbrc(T.float32(BIG), p_sent_v)
+
+                    vid = cid * 2 + subid
                     for s in T.serial(num_local_tasks):
-                        c = cid + s * num_kernels
+                        c = vid + s * num_vcores
                         if c < nchunk:
                             for r in range(M):
                                 T.copy(x[r : r + 1, c * tn : (c + 1) * tn], x_r)
@@ -1461,91 +1692,64 @@ def _build_nsplit_partial(M, N, op_kind, dtype, work_dtype, vector_cores, tn, nc
                                 else:
                                     T.reduce_min(w_r, m_r, dim=1)
                                 T.vbrc(m_r, e_r)
-                                for i, j in T.Parallel(1, tn):
-                                    c_r[i, j] = T.if_then_else(
-                                        w_r[i, j] == e_r[i, j],
-                                        T.cast(j, "float32"),
-                                        T.float32(BIG),
-                                    )
-                                T.reduce_min(c_r, f_r, dim=1)
+                                T.vcmp(w_r, e_r, p_cmp, "eq")
+                                T.vselect(p_cmp, p_idx_j, p_sent_v, p_cand)
+                                T.reduce_min(p_cand, f_r, dim=1)
                                 ext_out[r] = m_r[0, 0]
                                 gidx_out[r] = T.cast(c * tn, "float32") + f_r[0, 0]
-                            T.copy(ext_out[0:M], ws_val[c * M : (c + 1) * M])
-                            T.copy(gidx_out[0:M], ws_idx[c * M : (c + 1) * M])
+                            with T.rs("PIPE_MTE3"):
+                                T.copy(ext_out[0:M], ws_val[c, 0:M])
+                                T.copy(gidx_out[0:M], ws_idx[c, 0:M])
 
-        return argreduce_partial
+                    with T.rs("PIPE_MTE3"):
+                        T.block_barrier(0)
 
-    return _partial
+                    if vid == 0:
+                        T.vbrc(T.float32(BIG), sent_v)
+                        T.copy(ws_val, val_ub)
+                        T.copy(ws_idx, idx_ub)
+                        if op_kind == "argmax":
+                            T.reduce_max(val_ub, g, dim=0)
+                        else:
+                            T.reduce_min(val_ub, g, dim=0)
+                        T.vbrc(g, g_brc)
+                        T.vcmp(val_ub, g_brc, cmp_eq, "eq")
+                        T.vselect(cmp_eq, idx_ub, sent_v, cand)
+                        T.reduce_min(cand, first, dim=0)
+                        T.reshape(first, first_flat)
+                        T.vcast(first_flat, out_ub, round_mode="rint")
+                        T.copy(out_ub[0:M], out[0:M])
 
+        return argreduce_nsplit_fused
 
-def _build_nsplit_merge(M, N, op_kind, dtype, work_dtype, tn, nchunk):
-    """ROUND-3-E merge kernel (transpose form): back to the fast dims=1 chain.
+    def _fused(block_m):
+        # The fused kernel requires the expert pipeline (T.Scope("Vector")
+        # + T.alloc_ub pure-vector form, mix-promoted so the inter-block
+        # barrier completes). The env is read per compile call
+        # (engine/lower.py device_codegen + jit_npu bisheng flags), so
+        # switching it around this jit call compiles ONLY this kernel in
+        # expert mode; every other path of this file stays Developer.
+        _prev = os.environ.get("TILELANG_ASCEND_MODE")
+        os.environ["TILELANG_ASCEND_MODE"] = "expert"
+        try:
+            return _fused_jit(block_m)
+        finally:
+            if _prev is None:
+                os.environ.pop("TILELANG_ASCEND_MODE", None)
+            else:
+                os.environ["TILELANG_ASCEND_MODE"] = _prev
 
-    Fix vs r3d: dims=0 reduction on the long-skinny (nchunk, M) view lowers
-    to per-column serial walks (r3d merge: 8.8us at (80,4), 33.4us at
-    (400,4)). This merge stages the chunk-major ws through shared, applies
-    the documented 2-axis T.transpose ((nchunk, M) -> (M, nchunk),
-    PL-1.1-transpose-chain family), then runs the proven (M, nchunk)
-    dims=1 tie-break chain (r3a merge: 1.46us).
-    """
-
-    @tilelang.jit(out_idx=[2], target="npuir")
-    def _merge():
-
-        @T.prim_func
-        def argreduce_merge(
-            ws_val: T.Tensor((nchunk, M), work_dtype),
-            ws_idx: T.Tensor((nchunk, M), "float32"),
-            out: T.Tensor((M,), "int64"),
-        ):
-            with T.Kernel(1, is_npu=True) as (cid, _):
-                val_t = T.alloc_shared((nchunk, M), work_dtype)
-                val_s = T.alloc_shared((M, nchunk), work_dtype)
-                idx_t = T.alloc_shared((nchunk, M), "float32")
-                idx_s = T.alloc_shared((M, nchunk), "float32")
-                val_f = T.alloc_fragment((M, nchunk), work_dtype)
-                idx_f = T.alloc_fragment((M, nchunk), "float32")
-                g = T.alloc_fragment((M, 1), work_dtype)
-                g_brc = T.alloc_fragment((M, nchunk), work_dtype)
-                cmp_eq = T.alloc_fragment((M, nchunk), "bool")
-                sent_v = T.alloc_fragment((M, nchunk), "float32")
-                cand = T.alloc_fragment((M, nchunk), "float32")
-                first = T.alloc_fragment((M, 1), "float32")
-                first_flat = T.alloc_fragment((M,), "float32")
-                out_ub = T.alloc_shared((M,), "int64")
-
-                T.vbrc(T.float32(BIG), sent_v)
-                T.copy(ws_val, val_t)
-                T.transpose(val_t, val_s, permutation=[1, 0])
-                T.copy(ws_idx, idx_t)
-                T.transpose(idx_t, idx_s, permutation=[1, 0])
-                T.copy(val_s, val_f)
-                T.copy(idx_s, idx_f)
-                if op_kind == "argmax":
-                    T.reduce_max(val_f, g, dim=1)
-                else:
-                    T.reduce_min(val_f, g, dim=1)
-                T.vbrc(g, g_brc)
-                T.vcmp(val_f, g_brc, cmp_eq, "eq")
-                T.vselect(cmp_eq, idx_f, sent_v, cand)
-                T.reduce_min(cand, first, dim=1)
-                # r5 epilogue (see _build_resident): vectorized cast; the
-                # ``T.Parallel`` loop on first[i,0] (rank-2 -> rank-1) stayed
-                # scalar (NpuLoopVectorize rank-reduction guard).
-                T.reshape(first, first_flat)
-                T.vcast(first_flat, out_ub, round_mode="rint")
-                T.copy(out_ub[0:M], out[0:M])
-
-        return argreduce_merge
-
-    return _merge
+    return _fused
 
 
-def build_nsplit(M, N, op_kind, dtype, tn=None):
-    """C6 composition entry for run_bench --mode nsplit (round-3 A/B).
+def build_nsplit(M, N, op_kind, dtype, tn=None, num_blocks=None):
+    """C6 fused entry for run_bench --mode nsplit (R7-e: tunable).
 
-    Returns ``f(x, ws_val, ws_idx) -> out`` launching partial then merge;
-    the runner allocates and reuses the (M, nchunk) x2 workspace.
+    Returns ``f(x, ws_val, ws_idx) -> out`` with one device launch; the
+    runner allocates and reuses the ``(nchunk, M)`` x2 workspace.
+    ``tn``/``num_blocks`` override the calibrated defaults (see
+    ``_nsplit_config`` / ``_build_nsplit_fused`` docstrings; A/B data in
+    data/1014 report sections 4.1-4.3).
     """
     vector_cores = NPUUtils.get().get_aicore_num() * 2
     work_dtype = "float32" if dtype == "bfloat16" else dtype
@@ -1557,23 +1761,20 @@ def build_nsplit(M, N, op_kind, dtype, tn=None):
     if N % tn != 0:
         raise ValueError(f"tn={tn} must divide N={N} (zero-tail chunking)")
     nchunk = N // tn
-    partial = _build_nsplit_partial(M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk)(M)
-    merge = _build_nsplit_merge(M, N, op_kind, dtype, work_dtype, tn, nchunk)()
-
-    def launch(x, ws_val, ws_idx):
-        partial(x, ws_val, ws_idx)
-        return merge(ws_val, ws_idx)
-
-    return launch
+    return _build_nsplit_fused(
+        M, N, op_kind, dtype, work_dtype, vector_cores, tn, nchunk, num_blocks
+    )(M)
 
 
-def run_nsplit_L0():
+def run_nsplit_L0(tn=None, num_blocks=None):
     """C6 precision gate: constructed tie/edge rows across chunk boundaries.
 
     Covers the round8-op9 failure class: cross-chunk first-occurrence
     tie-break (duplicate extremes in different chunks, adjacent-chunk tie,
     extreme only in a late chunk), all-equal rows, all-(+-inf) rows, M=1,
-    and randn sweeps per dtype/kind.
+    and randn sweeps per dtype/kind. R7-e: ``tn``/``num_blocks`` overrides
+    (``--tn``/``--blocks`` CLI) let the framework precision-gate any A/B
+    config, not just the default rule.
     """
     vector_cores = NPUUtils.get().get_aicore_num() * 2
     n_cases = 0
@@ -1581,21 +1782,21 @@ def run_nsplit_L0():
         dt = _DTYPE_MAP[dtype_str]
         ws_dt = torch.float32 if dtype_str == "bfloat16" else dt
         for op_kind in ("argmax", "argmin"):
-            cfg = _nsplit_config(4, 102400, dtype_str, vector_cores)
+            cfg = _nsplit_config(4, 102400, dtype_str, vector_cores, tn)
             assert cfg is not None, f"nsplit config missing for {dtype_str}"
-            tn, nchunk = cfg["tn"], cfg["nchunk"]
-            launch = build_nsplit(4, 102400, op_kind, dtype_str, tn)
-            ws_val = torch.empty(4, nchunk, dtype=ws_dt, device="npu")
-            ws_idx = torch.empty(4, nchunk, dtype=torch.float32, device="npu")
+            tn_eff, nchunk = cfg["tn"], cfg["nchunk"]
+            launch = build_nsplit(4, 102400, op_kind, dtype_str, tn_eff, num_blocks)
+            ws_val = torch.empty(nchunk, 4, dtype=ws_dt, device="npu")
+            ws_idx = torch.empty(nchunk, 4, dtype=torch.float32, device="npu")
 
             v = 7.0 if op_kind == "argmax" else -7.0
             v2 = 14.0 if op_kind == "argmax" else -14.0
             x = torch.zeros(4, 102400, dtype=dt, device="npu")
             x[0, 5] = v
-            x[0, 102400 - tn] = v  # duplicate extreme, late chunk -> 5
-            x[1, 102400 - tn] = v2  # extreme only in late chunk
-            x[3, tn - 1] = v  # adjacent-chunk tie -> tn-1
-            x[3, tn] = v
+            x[0, 102400 - tn_eff] = v  # duplicate extreme, late chunk -> 5
+            x[1, 102400 - tn_eff] = v2  # extreme only in late chunk
+            x[3, tn_eff - 1] = v  # adjacent-chunk tie -> tn-1
+            x[3, tn_eff] = v
             y = launch(x, ws_val, ws_idx)
             ref = golden_argreduce(x.cpu(), op_kind)
             assert y.dtype == torch.int64 and torch.equal(y.cpu(), ref), (
@@ -1607,10 +1808,10 @@ def run_nsplit_L0():
             # all-(extreme-unit) rows: all -inf for argmax / all +inf for argmin
             fill = float("-inf") if op_kind == "argmax" else float("inf")
             x2 = torch.full((2, 102400), fill, dtype=dt, device="npu")
-            ws_val2 = torch.empty(2, nchunk, dtype=ws_dt, device="npu")
-            ws_idx2 = torch.empty(2, nchunk, dtype=torch.float32, device="npu")
+            ws_val2 = torch.empty(nchunk, 2, dtype=ws_dt, device="npu")
+            ws_idx2 = torch.empty(nchunk, 2, dtype=torch.float32, device="npu")
             y2 = launch(x2, ws_val2, ws_idx2) if False else None
-            launch1 = build_nsplit(2, 102400, op_kind, dtype_str, tn)
+            launch1 = build_nsplit(2, 102400, op_kind, dtype_str, tn_eff, num_blocks)
             y2 = launch1(x2, ws_val2, ws_idx2)
             ref2 = golden_argreduce(x2.cpu(), op_kind)
             assert torch.equal(y2.cpu(), ref2), (
@@ -1624,11 +1825,11 @@ def run_nsplit_L0():
             # index instead (fixed here only; the perf_opt original still
             # carries the rot).
             x3 = torch.zeros(1, 102400, dtype=dt, device="npu")
-            x3[0, 3 * tn + 7] = v
-            x3[0, (nchunk - 1) * tn + 7] = v
-            ws_val3 = torch.empty(1, nchunk, dtype=ws_dt, device="npu")
-            ws_idx3 = torch.empty(1, nchunk, dtype=torch.float32, device="npu")
-            launch2 = build_nsplit(1, 102400, op_kind, dtype_str, tn)
+            x3[0, 3 * tn_eff + 7] = v
+            x3[0, (nchunk - 1) * tn_eff + 7] = v
+            ws_val3 = torch.empty(nchunk, 1, dtype=ws_dt, device="npu")
+            ws_idx3 = torch.empty(nchunk, 1, dtype=torch.float32, device="npu")
+            launch2 = build_nsplit(1, 102400, op_kind, dtype_str, tn_eff, num_blocks)
             y3 = launch2(x3, ws_val3, ws_idx3)
             ref3 = golden_argreduce(x3.cpu(), op_kind)
             assert torch.equal(y3.cpu(), ref3), (
@@ -1646,20 +1847,33 @@ def run_nsplit_L0():
                     f"[nsplit-L0] randn seed={seed} mismatch {dtype_str}/{op_kind}"
                 )
                 n_cases += 1
-            print(f"[nsplit-L0] PASS: {dtype_str}/{op_kind} tn={tn} nchunk={nchunk}")
+            print(
+                f"[nsplit-L0] PASS: {dtype_str}/{op_kind} tn={tn_eff} "
+                f"nchunk={nchunk} blocks={num_blocks or 'auto'}"
+            )
     print(f"[nsplit-L0] ALL PASS: {n_cases} cases")
 
 
 # ---------------------------------------------------------------------------
 # Stage-4 bench helper: uniform entry for perf_opt/run_bench.py
 # ---------------------------------------------------------------------------
-def build_case(M, N, op_kind, dtype, block_m=None, tile_n=None):
-    """Build a launch closure for one workload (Stage 4 bench entry)."""
+def build_case(M, N, op_kind, dtype, block_m=None, tile_n=None, num_blocks=None):
+    """Build a launch closure for one workload (Stage 4 bench entry).
+
+    R7-e nsplit tunables (all data in /home/tilelang/l00970450/upload/data/1014):
+
+    - ``tile_n`` doubles as the nsplit chunk-width override (``tn``) for
+      nsplit-eligible shapes (the tiled-path meaning is unchanged);
+    - ``num_blocks`` overrides the nsplit AI-core block count;
+    - with neither override the calibrated default rule applies
+      (``_nsplit_config``: largest tn with nchunk in [vector_cores//3,
+      vector_cores//2] -- the measured optimum, data/1014 section 4.1).
+    """
     cfg = _select_config(M, N, dtype)
     if block_m is None:
         block_m = cfg["block_m"]
     vector_cores = NPUUtils.get().get_aicore_num() * 2
-    ncfg = _nsplit_config(M, N, dtype, vector_cores)
+    ncfg = _nsplit_config(M, N, dtype, vector_cores, tn=tile_n)
     if ncfg is not None:
         return _build_nsplit_dispatch(
             M,
@@ -1670,6 +1884,7 @@ def build_case(M, N, op_kind, dtype, block_m=None, tile_n=None):
             vector_cores,
             ncfg["tn"],
             ncfg["nchunk"],
+            num_blocks,
         )(block_m)
     if cfg["path"] == "narrow":
         kernel = _build_narrow(

@@ -1,132 +1,106 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026.
-"""PL-1.20-nsplit-perrow-partial: optimization delta skeleton (before/after).
-
-BEFORE (slow): partial processes each column chunk as one (M,tn) 2D block
-  (strided column-block read ~1GB/s/core + 2D fused-ite scalarizes at M>=2).
-AFTER (fast): per-row (1,tn) unrolled chains, all bm=1 proven shapes, plus
-  flat chunk-major ws writes + transpose merge.
-Assertion: per-row partial >= 1.5x faster; result bit-exact vs torch.argmax.First verified: 2026-09-28, tilelang 0.1.2 (dev root build 2026-09-24) + CANN 8.5.0 / Ascend910B2C (argmax-_argreduce_kernel-stage4-20260928).
-"""
+"""PL-1.20 Expert N-split: partial, barrier, and tie-break merge in one launch."""
 
 import os
-import time
-
-os.environ.setdefault("TILELANG_ASCEND_MODE", "Developer")
 import tilelang
 import tilelang.language as T
 import torch
 import torch_npu  # noqa: F401
 
-M, N, TN, NC, CORES = 4, 102400, 2560, 40, 48
+M, N, TN = 4, 102400, 5120
+NCHUNK, NUM_BLOCKS = N // TN, N // (2 * TN)
 
 
-def build_partial(per_row):
-    @tilelang.jit(target="npuir")
-    def _partial():
+def build_fused_nsplit():
+    @tilelang.jit(out_idx=[3], target="npuir")
+    def _jit():
         @T.prim_func
-        def argreduce_partial(
+        def argreduce_nsplit_fused(
             x: T.Tensor((M, N), "float16"),
-            ws_val: T.Tensor((NC * M,), "float16"),
-            ws_idx: T.Tensor((NC * M,), "float32"),
+            ws_val: T.Tensor((NCHUNK, M), "float16"),
+            ws_idx: T.Tensor((NCHUNK, M), "float32"),
+            out: T.Tensor((M,), "int64"),
         ):
-            with T.Kernel(CORES, is_npu=True) as (cid, _):
-                if per_row:
-                    x_r = T.alloc_shared((1, TN), "float16")
-                    w_r = T.alloc_fragment((1, TN), "float16")
-                    m_r = T.alloc_fragment((1, 1), "float16")
-                    e_r = T.alloc_fragment((1, TN), "float16")
-                    c_r = T.alloc_fragment((1, TN), "float32")
-                    f_r = T.alloc_fragment((1, 1), "float32")
-                    eo = T.alloc_shared((M,), "float16")
-                    go = T.alloc_shared((M,), "float32")
-                    for _rep in T.serial(8):
-                        for s in T.serial(-(-NC // CORES)):
-                            cc = cid + s * CORES
-                            if cc < NC:
-                                for r in range(M):
-                                    T.copy(x[r : r + 1, cc * TN : (cc + 1) * TN], x_r)
-                                    T.copy(x_r, w_r)
-                                    T.reduce_max(w_r, m_r, dim=1)
-                                    T.vbrc(m_r, e_r)
-                                    for i, j in T.Parallel(1, TN):
-                                        c_r[i, j] = T.if_then_else(
-                                            w_r[i, j] == e_r[i, j],
-                                            T.cast(j, "float32"),
-                                            T.float32(2**30),
-                                        )
-                                    T.reduce_min(c_r, f_r, dim=1)
-                                    eo[r] = m_r[0, 0]
-                                    go[r] = T.cast(cc * TN, "float32") + f_r[0, 0]
-                                T.copy(eo[0:M], ws_val[cc * M : (cc + 1) * M])
-                                T.copy(go[0:M], ws_idx[cc * M : (cc + 1) * M])
-                else:
-                    x_ub = T.alloc_shared((M, TN), "float16")
-                    m = T.alloc_fragment((M, 1), "float16")
-                    e = T.alloc_fragment((M, TN), "float16")
-                    c = T.alloc_fragment((M, TN), "float32")
-                    f = T.alloc_fragment((M, 1), "float32")
-                    eo = T.alloc_shared((M,), "float16")
-                    go = T.alloc_shared((M,), "float32")
-                    for _rep in T.serial(8):
-                        for s in T.serial(-(-NC // CORES)):
-                            cc = cid + s * CORES
-                            if cc < NC:
-                                T.copy(x[0:M, cc * TN : (cc + 1) * TN], x_ub[0:M, 0:TN])
-                                T.reduce_max(x_ub, m, dim=1)
-                                T.vbrc(m, e)
-                                for i, j in T.Parallel(M, TN):
-                                    c[i, j] = T.if_then_else(
-                                        x_ub[i, j] == e[i, j],
-                                        T.cast(j, "float32"),
-                                        T.float32(2**30),
-                                    )
-                                T.reduce_min(c, f, dim=1)
-                                for i in T.Parallel(M):
-                                    eo[i] = m[i, 0]
-                                    go[i] = T.cast(cc * TN, "float32") + f[i, 0]
-                                T.copy(eo[0:M], ws_val[cc * M : (cc + 1) * M])
-                                T.copy(go[0:M], ws_idx[cc * M : (cc + 1) * M])
+            with T.Kernel(NUM_BLOCKS, is_npu=True) as (cid, subid), T.Scope("Vector"):
+                # Per-chunk partial. x_r is reused as the reduce/compare source.
+                x_r = T.alloc_ub((1, TN), "float16")
+                max_r = T.alloc_ub((1, 1), "float16")
+                max_brc = T.alloc_ub((1, TN), "float16")
+                idx_src = T.alloc_ub((TN,), "float32")
+                idx_r = T.alloc_ub((1, TN), "float32")
+                sentinel_r = T.alloc_ub((1, TN), "float32")
+                equal_r = T.alloc_ub((1, TN), "bool")
+                candidate_r = T.alloc_ub((1, TN), "float32")
+                first_r = T.alloc_ub((1, 1), "float32")
+                partial_val = T.alloc_ub((M,), "float16")
+                partial_idx = T.alloc_ub((M,), "float32")
+                # Final merge. These are small: NCHUNK * M is 20 * 4 here.
+                val_ub = T.alloc_ub((NCHUNK, M), "float16")
+                idx_ub = T.alloc_ub((NCHUNK, M), "float32")
+                global_val = T.alloc_ub((1, M), "float16")
+                global_brc = T.alloc_ub((NCHUNK, M), "float16")
+                global_equal = T.alloc_ub((NCHUNK, M), "bool")
+                global_sentinel = T.alloc_ub((NCHUNK, M), "float32")
+                global_candidate = T.alloc_ub((NCHUNK, M), "float32")
+                global_first = T.alloc_ub((1, M), "float32")
+                first_flat = T.alloc_ub((M,), "float32")
+                out_ub = T.alloc_ub((M,), "int64")
+                T.arange(idx_src, [1], 0)
+                T.reshape(idx_src, idx_r)
+                T.vbrc(T.float32(2**30), sentinel_r)
+                vid = cid * 2 + subid
+                for r in range(M):
+                    T.copy(x[r : r + 1, vid * TN : (vid + 1) * TN], x_r)
+                    T.reduce_max(x_r, max_r, dim=1)
+                    T.vbrc(max_r, max_brc)
+                    T.vcmp(x_r, max_brc, equal_r, "eq")
+                    T.vselect(equal_r, idx_r, sentinel_r, candidate_r)
+                    T.reduce_min(candidate_r, first_r, dim=1)
+                    partial_val[r] = max_r[0, 0]
+                    partial_idx[r] = T.cast(vid * TN, "float32") + first_r[0, 0]
+                with T.rs("PIPE_MTE3"):
+                    T.copy(partial_val, ws_val[vid, 0:M])
+                    T.copy(partial_idx, ws_idx[vid, 0:M])
+                    T.block_barrier(0)
+                if vid == 0:
+                    T.vbrc(T.float32(2**30), global_sentinel)
+                    T.copy(ws_val, val_ub)
+                    T.copy(ws_idx, idx_ub)
+                    T.reduce_max(val_ub, global_val, dim=0)
+                    T.vbrc(global_val, global_brc)
+                    T.vcmp(val_ub, global_brc, global_equal, "eq")
+                    T.vselect(global_equal, idx_ub, global_sentinel, global_candidate)
+                    T.reduce_min(global_candidate, global_first, dim=0)
+                    T.reshape(global_first, first_flat)
+                    T.vcast(first_flat, out_ub, round_mode="rint")
+                    T.copy(out_ub, out)
 
-        return argreduce_partial
+        return argreduce_nsplit_fused
 
-    return _partial()
+    previous_mode = os.environ.get("TILELANG_ASCEND_MODE")
+    os.environ["TILELANG_ASCEND_MODE"] = "expert"
+    try:
+        return _jit()
+    finally:
+        if previous_mode is None:
+            os.environ.pop("TILELANG_ASCEND_MODE", None)
+        else:
+            os.environ["TILELANG_ASCEND_MODE"] = previous_mode
 
 
 def main():
     torch.manual_seed(0)
     x = torch.randn(M, N, dtype=torch.float16, device="npu")
-    wsv = torch.empty(NC * M, dtype=torch.float16, device="npu")
-    wsi = torch.empty(NC * M, dtype=torch.float32, device="npu")
-    ref = torch.argmax(x.cpu(), dim=-1)
-    k2d, k1r = build_partial(False), build_partial(True)
-    outs = []
-    for k in (k2d, k1r):
-        k(x, wsv, wsi)
-        # merge reference in torch (merge kernel itself is PL-1.20 text)
-        wv = wsv.view(NC, M).float()
-        wi = wsi.view(NC, M)
-        gm = wv.cpu().max(dim=0).values
-        y = torch.empty(M, dtype=torch.int64)
-        for m in range(M):
-            y[m] = int(wi.cpu()[wv.cpu()[:, m] == gm[m], m].min())
-        outs.append(y)
-    assert torch.equal(outs[0], ref) and torch.equal(outs[1], ref), "wrong result"
-    ts = []
-    for k in (k2d, k1r):
-        for _ in range(5):
-            k(x, wsv, wsi)
-        torch.npu.synchronize()
-        t0 = time.perf_counter()
-        for _ in range(30):
-            k(x, wsv, wsi)
-        torch.npu.synchronize()
-        ts.append((time.perf_counter() - t0) / 30)
-    print(
-        f"2D partial: {ts[0] * 1e6:.1f}us  per-row partial: {ts[1] * 1e6:.1f}us  "
-        f"ratio={ts[0] / ts[1]:.2f} [REP=8x; msprof single-shot 25.1 vs 8.6us partial]"
-    )
-    assert ts[0] >= 1.3 * ts[1], "per-row delta not reproduced"
-    print("ASSERT PASS: PL-1.20-nsplit-perrow-partial delta reproduced")
+    x[0, TN + 7] = 100.0
+    x[0, 3 * TN + 9] = 100.0
+    kernel = build_fused_nsplit()
+    ws_val = torch.empty((NCHUNK, M), dtype=torch.float16, device="npu")
+    ws_idx = torch.empty((NCHUNK, M), dtype=torch.float32, device="npu")
+    out = kernel(x, ws_val, ws_idx)
+    reference = torch.argmax(x.cpu(), dim=-1)
+    assert torch.equal(out.cpu(), reference), (out.cpu(), reference)
+    assert int(out.cpu()[0]) == TN + 7
+    print("ASSERT PASS: PL-1.20 Expert single-launch N-split reproduced")
 
 
 if __name__ == "__main__":

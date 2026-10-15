@@ -46,7 +46,7 @@
 | PL-1.10-loads-first-decoupling | 单 staging 复用链致 MTE2/VEC 零重叠 → per-input staging + 三输入前置装载（收益数字见条目） | verified |
 | PL-1.14-mte3-strided-ws | 跨引擎 ws 中继写侧必须块连续（band 化 MTE3 3× 回退；读侧逐块入 L1 band 列偏移区两全） | verified |
 | PL-1.19-scatter-col-write-amplification | (M,1) 列切片 UB→GM 写 42× 放大 → 扁平 chunk-major 连续写 | verified |
-| PL-1.20-nsplit-perrow-partial | C6 N-split per-row partial + transpose merge（小 M 大 N 2.2–2.6×；tn=最大单波 nchunk≤cores） | verified |
+| PL-1.20-nsplit-perrow-partial | Expert 单 launch N-split：per-row partial + block_barrier + lane-0 dim-0 merge（小 M、大 N；tn/num_blocks 按单波 V-core 利用率调优） | verified |
 
 ### attention.md — Expert persistent / attention 族
 

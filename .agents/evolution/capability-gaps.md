@@ -488,13 +488,15 @@ capability: >-
   但条目丢失；源 repro .py 已清理仅存 repro/__pycache__ pyc）。
 blocked_algo: >-
   argmax/_argreduce_kernel tiled 路径被迫 bm=1（DESIGN §5.2 强制）——lm-head 类
-  小 M 负载核利用率被钉死在 M/48（4/48），是 C6 N-split 结构（本库 PL-1.20）
-  的存在动因；Stage 4 实测翻转后 lm-head 2.20x/2.60x。
+  小 M 负载的核利用率被限制在 M/48（如 4/48），形成单 launch 实现的性能上限。
 evidence:
   - repro/__pycache__/TRAP-multitile-bm-gt1-segfault.cpython-311.pyc（前次任务，
     2026-09-23；触发矩阵见 DESIGN.md examples/argmax/_argreduce_kernel §9.1-C-5）。
   - DESIGN.md §9.1-C-5 / §9.2-R3（本任务引用其结论未复现崩溃本身）。
-workaround: tiled 路径强制 bm=1（工厂期保证）；小 M 大 N 负载改 N-split 两段 kernel。
+workaround: >-
+  正确性绕法为 tiled 路径强制 bm=1（工厂期保证）。性能侧暂无满足源/目标
+  device kernel launch 一一对应约束的通用绕法；应继续寻找同一次 launch 内的方案，
+  无可行方案时记录为设计限制。
 occurrences: 1  # 前次任务识别；本链 Stage 1（DESIGN §9.4-R9）发现登记丢失并补录、Stage 4 引用未复现崩溃本身
 tasks: [argmax-_argreduce_kernel-stage3-前次任务, argmax-_argreduce_kernel-20260924T031005Z]
 toolchain_stamp: tilelang 0.1.2 (dev root build 2026-09-24) / CANN 8.5.0 / Ascend910B2C

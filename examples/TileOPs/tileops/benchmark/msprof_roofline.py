@@ -173,11 +173,16 @@ def parse_bin_file(bin_path):
         for graph in j.get("multiple_rooflines", []):
             title = graph.get("title", "")
             for r in graph.get("rooflines", []):
-                bw = float(r["bw"])
-                ai = float(r["point"][0])
-                perf = float(r["point"][1])
-                computility = float(r["computility"])
-                ratio = float(r["ratio"])
+                try:
+                    bw = float(r["bw"])
+                    ai = float(r["point"][0])
+                    perf = float(r["point"][1])
+                    computility = float(r["computility"])
+                    ratio = float(r["ratio"])
+                except (KeyError, IndexError, TypeError, ValueError):
+                    # An inapplicable pipe metric (for example, a cube stub's
+                    # ratio="NA") must not discard valid later roofline points.
+                    continue
                 bw_name = r.get("bw_name", "")
                 computility_name = r.get("computility_name", "")
                 roofline_entries.append(

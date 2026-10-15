@@ -65,7 +65,7 @@ known_impl: [examples/TileOPs/tileops/kernels/reduction/logsumexp/_logsumexp_ker
 kb_links: [CASE-reduction-logsumexp, CASE-norm-adalayern-stage4（persistent 形态调优档案）]
 ---
 
-R1：max + sum 合并扫描；和与平方和一次扫描。R2：分块归约 + 合并（两阶段 / 树形）；Welford。R3：扫描遍数；跨核归并代价。R4：水平 vs 垂直 lane 映射；跨核 sync 代价。row-reduction 族迁移基准形态（全 N 驻留 UB + M 行块分核 + 尾块 T.min 双显式 slice——logsumexp grid 形态 / ada_layer_norm persistent 形态两任务实测，详见 ALG-layernorm R4）。
+R1：max + sum 合并扫描；和与平方和一次扫描。R2：分块归约 + 合并（需要保证在同一次 device kernel launch、同一个 `@T.prim_func` 内）；Welford。R3：扫描遍数；跨核归并代价。R4：水平 vs 垂直 lane 映射；跨核 sync 代价。row-reduction 族迁移基准形态（全 N 驻留 UB + M 行块分核 + 尾块 T.min 双显式 slice——logsumexp grid 形态 / ada_layer_norm persistent 形态两任务实测，详见 ALG-layernorm R4）。
 
 ---
 id: ALG-topk

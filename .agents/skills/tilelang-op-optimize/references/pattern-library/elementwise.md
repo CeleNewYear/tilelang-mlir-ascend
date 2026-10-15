@@ -110,7 +110,7 @@ repro: repro/repro_strided_colblock_read.py
 id: PL-1.20-nsplit-perrow-partial
 kind: pattern
 family: [reduction]
-apis: [T.Kernel, T.transpose, T.vbrc]
+apis: [T.Kernel, T.Scope, T.alloc_ub, T.block_barrier, T.reduce_max, T.reduce_min, T.vbrc]
 dtype: [fp16, bf16, fp32]
 device: 910B2C
 status: verified
@@ -119,10 +119,30 @@ toolchain: tilelang 0.1.2 (dev root build 2026-09-24) + CANN 8.5.0 / Ascend910B2
 repro: repro/repro_nsplit_pattern.py
 ---
 
-### C6 N-split per-row partial + transpose merge：小 M 大 N 负载 2.2–2.6×
+### C6 N-split：单 launch 的 per-row partial + 核内 merge
 
-适用：M ≤ cores、N 超驻留（lm-head 类 (4,102400)）——单 kernel tiled 被 bm=1 陷阱钉死在 M 个核（4/48）。结构（慢→快关键 delta）：
-- partial：`T.Kernel(min(nchunk,cores))` + `for s in T.serial: c=cid+s*K; if c<nchunk:` + **`for r in range(M)` 展开的 (1,tn) 行链**（copy/reduce/vbrc/fused-ite/reduce_min 全部 bm=1 已验证形态——关键修复是 (M,tn) 2D 融合 ite 踩 TRAP-parallel2d-bm-ge2-scalarize；跨步列块读本身不慢，见 CONST-gm-to-ub-bw-dilution 更正记录）+ 每 chunk 两条 1D 连续 ws 写（chunk-major 扁平，消 PL-1.19 写放大）。
-- merge：单 block，ws 按 (nchunk,M) 视图读入 shared → `T.transpose(...,[1,0])` → (M,nchunk) dims=1 tie-break 链（E1 同构：vselect 命中 chunk 的已全局化 idx，min = 首现）。
-- **tn 规则（扫描实测 tn∈{1280,2048,2560,5120} → 8.58µs@2560 最优）：最大单波 nchunk ≤ cores**（tn 升序 256 倍数扫首个除数）；nchunk>cores（双波 2:1）与 nchunk≪cores（核饥饿）均劣。
-- 实测：lm-head fp16 25.90→11.78µs（2.20×）、bf16 30.61→11.75µs（2.60×）；工厂契约保持单 callable（组合层 torch.empty workspace + 双发射）。
+适用：小 M、大 N，单 kernel 的 bm=1 路径无法占满 V-core（lm-head 类 `(4,102400)`）。
+
+编程模式：Expert。该形态在 `T.Scope("Vector")` 中使用 `T.alloc_ub`，
+N-split fused 分支须以 `TILELANG_ASCEND_MODE=expert` 编译；其他不依赖
+该结构的路径可保持其原有编程模式。
+
+硬约束：
+- partial、workspace 写入、跨 block 同步、最终 merge 在同一个
+  `@T.prim_func` / 一次 device launch 中；
+- `num_blocks <= aicore_num`，保证 `T.block_barrier` 单波完成；
+- 使用 `(cid, subid)` 展开为 `vid = cid * 2 + subid`，避免同一 AI Core
+  的两个 V-core 重复计算同一 chunk。
+
+结构：
+- 各 V-core 对其 chunk 执行 **`for r in range(M)` 展开的 `(1, tn)` 行链**；
+  连续读取输入，并连续写入二维 `ws_val[nchunk, M]` / `ws_idx[nchunk, M]`。
+  该形态避开 `(M, tn)` 2D fused-ite 的标量化陷阱
+  `TRAP-parallel2d-bm-ge2-scalarize`；
+- `T.block_barrier(0)` 在所有 producer 写完 workspace 后汇合；
+- `vid == 0` 读取二维 workspace，沿 `dim=0` 规约 value，并以全局化 idx
+  做首现 tie-break；
+- merge 不需要 `T.transpose`，workspace 不需要重解释为转置布局。
+
+`tn` 与 `num_blocks` 是该结构的调优参数：默认应让 `nchunk` 落在单波、且
+V-core 利用率合理的区间；需针对目标形状和当前工具链以完整单 launch 路径测量。

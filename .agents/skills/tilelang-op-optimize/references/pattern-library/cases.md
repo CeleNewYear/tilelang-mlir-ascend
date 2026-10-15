@@ -336,9 +336,16 @@ toolchain: tilelang 0.1.2 (dev root build 2026-09-24) + CANN 8.5.0 / Ascend910B2
 repro: repro-missing
 ---
 
-### argmax/_argreduce_kernel Stage 4 完整档案（C6 预注册裁决翻转 + 证伪更正）
+### argmax/_argreduce_kernel C6 N-split 单 launch 集成案例
 
-几何平均 11.5×（lm-head 2.20×/2.60× C6 N-split 翻转、hidden-state 5.8×/4.4× 链式+arange 修复、3d 130× 窄行 deinterleave）。要点：①DESIGN §1.6.4 实验裁决三件套（结构+阈值+回写路径）在续跑会话直接闭环——预注册的价值实证；②session-1 标量化归因被操作数变体对照证伪（TRAP-parallel2d-bm-ge2-scalarize）；③C6 双 kernel 的 msprof 口径 = 两段 Task Duration 之和（--kernel-name 分别捕获）。工件（工作区过程文件，任务级溯源）：examples/argmax/_argreduce_kernel/perf_opt/opt_log.md（[DESIGN_LIMIT] 双门槛达成：2.20×>2× + 设计层归因）；知识域证据见本库 repro/repro_nsplit_pattern.py 等六件。
+适用：小 M、大 N 的 ArgMax/ArgMin 规约，单 kernel 的 bm=1 路径无法充分利用
+V-core。该案例采用 PL-1.20 的 Expert N-split 结构：各 V-core 执行 per-row
+`(1, tn)` partial 并写入二维 workspace；所有 producer 经 `T.block_barrier`
+汇合后，lane 0 在同一个 `@T.prim_func` 内完成 dim-0 规约和首现索引 tie-break。
+编译时仅该 N-split fused 分支使用 `TILELANG_ASCEND_MODE=expert`；其他路径保持
+各自原有模式。性能测量以完整 fused kernel 的 `msprof op` Task Duration 为准。
+关键代码证据与最小正确性复现见 PL-1.20 的
+`repro/repro_nsplit_pattern.py`。
 
 ---
 id: CASE-argmax-argreduce-integration

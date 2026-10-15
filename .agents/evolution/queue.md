@@ -823,12 +823,13 @@ decided_by: evolver / human / -   # 裁决者
 - toolchain_stamp: 前次任务 2026-09-23（tilelang 0.1.2 dev build + CANN 8.5.0 + Ascend910B2C）；本任务引用环境 2026-09-24 同源
 - target_doc: .agents/skills/tilelang-op-optimize/references/pattern-library/traps-compiler.md
 - delta: |
-    add 条目 TRAP-multitile-bm-gt1-segfault：num_tiles>1 的 T.serial tile 循环 + bm>1 组合触发编译器 SIGSEGV（rc 139，无报错文本）；触发矩阵：bm=1 任意 tile 数 ✓ / bm>1 单 tile ✓ / bm>1 多 tile ✗。绕法：tiled 路径强制 bm=1（工厂期保证）；小 M 大 N 负载改 N-split 两段 kernel（elementwise.md PL-1.20）。关联：capability-gaps CG-2026-0014（open）——本条使其进入 kb_search 检索域（本次知识流失-考古循环的教训：CG 登记簿不在 pattern-library 检索索引内，设计期 kb_search 查不到该陷阱）。
-- status: pending
+    不执行原提案。编译器缺陷、触发矩阵与 bm=1 正确性绕法已由 capability-gaps
+    CG-2026-0014 承载，且该登记簿现已纳入 kb_search，无需重复写入 pattern-library。
+- status: rejected
 - confirmations: 1/2
 - created_by: task argmax-_argreduce_kernel-20260924T031005Z 2026-09-28
-- decided_by: -
-- decided_note: 与 VP-2026-0141（scaffolder 清理知识保全）联动：本条是清理致知识流失的实证案例。
+- decided_by: human 2026-10-10
+- decided_note: 重复登记；原性能绕法会增加 device kernel launch 数量，不满足源/目标 launch 一一对应约束。
 
 ## VP-2026-0127
 - type: D
@@ -3118,24 +3119,21 @@ decided_by: evolver / human / -   # 裁决者
 
 ## VP-2026-0137
 - type: R
-- title: core-split-strategy.md 补 N 向分核（N-split）谓词——分核三要素表与 §2.1/§2.4 透传文本当前只覆盖 M 向分核；小 M 大 N 负载（M≤16 且 M<核数 且 N≥32768 且 N%256==0）应路由到 N-split 两段 kernel 结构，配套实验裁决三件套（分派谓词 + 判定阈值 + 回写路径）作为 §1.6.4 落地范例
+- title: 拒绝：分核策略不得通过增加 device kernel launch 数量扩展
 - evidence:
-  - task argmax-_argreduce_kernel-20260924T031005Z Stage 4 + [DESIGN_LIMIT]：lm-head 类 (4,102400) 单 kernel 主选被 C-5（multitile bm>1 SIGSEGV）钉死 bm=1 → 4/48 核、实测贴 4 核 MTE2 聚合带宽地板；预注册 C6 N-split 备选 A/B 裁决 2.20×/2.60×（0.461×/0.386×，均 « 0.8× 翻转阈值）结构性胜出并采纳（perf_feedback.md [DESIGN_LIMIT] 双门槛达成；DESIGN §1.6.4 实验裁决三件套在续跑会话直接闭环——预注册价值实证）；elementwise.md PL-1.20（Stage 4 已回写结构形态）；遗留：DESIGN §1.4/§3.3 正式化走设计修订路由
-- repro: 复现条件——任一 row-reduction 族含小 M 大 N 负载的设计（lm-head 形态）；结构形态与 tn 规则见 PL-1.20（知识域）
-- toolchain_stamp: tilelang 0.1.2 dev root build 2026-09-24 + CANN 8.5.0 + Ascend910B2C / 2026-09-24~28
+  - 原提案试图把增加 device kernel launch 数量的方案写入共享分核标准；人工复核认定其违反源/目标 launch 严格一一对应约束。
+- repro: none
+- toolchain_stamp: none（流程约束裁决）
 - target_doc: .agents/skills/_shared/standards/core-split-strategy.md
 - delta: |
-    动作: update（两处）
-    定位锚 1: "## 1. 分核策略三要素（Stage 1 门禁核对项）"
-    new 文本 1: 节末追加：「**N 向分核（N-split）**：M 向分核对 M < 核数的小 M 大 N 负载（lm-head 形态，M≤16 且 M<物理核数 且 N≥32768 且 N%256==0）失效（核利用率钉死 M/48）——此类负载路由到 N-split 两段 kernel（partial 按 chunk 分核 + merge 单 block，结构见 pattern-library elementwise.md PL-1.20）；分派谓词静态可判，判定阈值（端到端 < 0.8× 主选即翻转）与回写路径（§1.4/§3.3 修订 + Stage 2 复审）按实验裁决三件套预注册（argmax 实证 2026-09-28：2.20×/2.60× 翻转）」。
-    定位锚 2: "### 2.4 Stage 4 — optimizer 调优提示（透传文本）"
-    new 文本 2: 透传文本补一句：小 M 大 N 负载的单 kernel 地板归因（核利用率 M/核数 + 带宽贴地）时，核对设计是否预注册 N-split 备选裁决；未预注册且结构性天花板明确（>2× 估计）→ 触发 [DESIGN_LIMIT] 路由。
-    动机: 分核标准只覆盖 M 向使设计期对小 M 大 N 负载无标准入口；本任务靠 §1.6.4 自建三件套才闭环——预置谓词使同族算子（ArgminFwdOp 等）设计期直接命中。
-- status: pending
+    不执行原提案。core-split-strategy 只描述同一次 device kernel launch 内的分核策略。
+    若负载在该约束下无法提高并行度，应继续寻找同 launch 方案；无可行方案时记录为
+    设计限制，不得增加相对于源算子的目标 launch 数量。
+- status: rejected
 - confirmations: -/-
 - created_by: task argmax-_argreduce_kernel-20260924T031005Z 2026-09-28
-- decided_by: -
-- decided_note: 知识侧结构形态已 Tier 0（PL-1.20 + CASE-argmax-argreduce-stage4）；本条为分核标准/流程侧。
+- decided_by: human 2026-10-10
+- decided_note: 原提案与严格 kernel launch 拓扑保持要求冲突，不写入共享分核标准。
 
 ## VP-2026-0138
 - type: R
@@ -3163,7 +3161,7 @@ decided_by: evolver / human / -   # 裁决者
 - type: R
 - title: design-review SKILL 检查项三则——① 维度 8 弃选论证 dtype/shape 支持面论断须同时核对所引文档表与 pattern-library 条目 `dtype:`/`status:` front-matter（实测口径比文档表更强）② 「依赖未实证常数」判定前先检索 `perf_opt/logs/` 该备选的终版日志（不只看首版反例）③ 维度 3 增「冻结工厂逻辑的分支可达性 + 预算口径一致性」核对点（阶梯/回退逐分支代入边界值）
 - evidence:
-  - task argmax-_argreduce_kernel-20260924T031005Z Stage 2：① 设计称 T.transpose dtype 限 fp16，被 T.transpose.md §2.2.1 与 pattern-library PL-1.1 front-matter `dtype: [fp16, fp32, bf16] / status: verified` 双双反驳——现有 skill 文本只点名「dtype 矩阵」未提示核对 pattern-library 实测口径（REVIEW 问题 3）；② 设计引 round8_op9 首版 4/4 mismatch 论证 C6 风险，漏引同 log 族 round9 终版（partial ≈15.7µs + merge ≈1.7µs golden PASS）——该数字正是 C6 收益常数的现成实测，直接改变「未实证常数」判定（REVIEW 问题 S5）；③ v1 阶梯伪代码 p=1 档死分支（`block_m is None and N×B_bm1 ≤ budget` 恒不可达）+ 契约外 N 区间选中 bm=1 驻留但实际 alloc 超自设安全预算（fp32 N=5000：60000≤65536 过滤通过，实际 bm=1 alloc 80000B > 64KB 纪律线）——分支可达性推演 + 边界 N 代入口径核对可纸面判定（复审 VP #1）
+  - task argmax-_argreduce_kernel-20260924T031005Z Stage 2：① 设计称 T.transpose dtype 限 fp16，被 T.transpose.md §2.2.1 与 pattern-library PL-1.1 front-matter `dtype: [fp16, fp32, bf16] / status: verified` 双双反驳——现有 skill 文本只点名「dtype 矩阵」未提示核对 pattern-library 实测口径（REVIEW 问题 3）；② 设计引 round8_op9 首版 4/4 mismatch 论证 C6 风险，漏引同 log 族 round9 终版（C6 端到端约 17.4µs，golden PASS）——该数字正是 C6 收益常数的现成实测，直接改变「未实证常数」判定（REVIEW 问题 S5；该证据不指定实现结构）；③ v1 阶梯伪代码 p=1 档死分支（`block_m is None and N×B_bm1 ≤ budget` 恒不可达）+ 契约外 N 区间选中 bm=1 驻留但实际 alloc 超自设安全预算（fp32 N=5000：60000≤65536 过滤通过，实际 bm=1 alloc 80000B > 64KB 纪律线）——分支可达性推演 + 边界 N 代入口径核对可纸面判定（复审 VP #1）
 - repro: 复现条件——任一含弃选论证/实验裁决计划/工厂期阶梯伪代码的 DESIGN 检视
 - toolchain_stamp: 流程规则（无运行时依赖）；证据环境 2026-09-24
 - target_doc: .agents/skills/tilelang-design-review/SKILL.md
@@ -3172,7 +3170,7 @@ decided_by: evolver / human / -   # 裁决者
     定位锚 1: 维度 8 表「向量化轴与布局决策完整性」行的「弃选论证前提核对」句（"...每个弃选候选的 repack/代价机制前提必须与所引 API 文档亲自核对一致..."）
     new 文本 1: 该句尾追加：「dtype/shape 支持面论断须同时核对所引文档的 DataType 表**与** pattern-library 对应条目的 `dtype:`/`status:` front-matter（实测口径比文档表更强）；两者任一矛盾 → fail（argmax 实证：T.transpose 文档表与 PL-1.1 front-matter 双源反驳设计声称的 fp16 限制）」。
     定位锚 2: 维度 8 表「实验裁决模式完整性」行（"判定裕度依赖未实证常数时"句）
-    new 文本 2: 该行判定口径追加：「备选被判『依赖未实证常数』时，先在 `perf_opt/logs/`（同算子前次任务或本任务早期）按 candidate/round 名检索该备选的**终版**日志——首版 mismatch 与终版 golden PASS 可能并存于同一 log 族，已有实测则该常数不再是未实证（argmax 实证：round9 终版 partial/merge µs 直接改变 C6 判定）」。
+    new 文本 2: 该行判定口径追加：「备选被判『依赖未实证常数』时，先在 `perf_opt/logs/`（同算子前次任务或本任务早期）按 candidate/round 名检索该备选的**终版**日志——首版 mismatch 与终版 golden PASS 可能并存于同一 log 族，已有实测则该常数不再是未实证（argmax 实证：round9 终版 C6 端到端时延直接改变 C6 判定；该证据不指定实现结构）」。
     定位锚 3: 维度 3（Tiling 策略）检查项表
     new 文本 3: 增检查点：「冻结规格中的工厂期选择逻辑（阶梯/回退/分派伪代码）做**分支可达性 + 预算口径一致性**分析：每条分支代入边界值走一遍（死代码 = 恒不可达分支；口径漂移 = 过滤器用 A 口径而 alloc 用 B 口径——如 p=1 档用 B_bm1 核算而实际 alloc 按 B_multi）——选定值对契约内形状正确不代表选择函数对契约外形状守纪律」。
     动机: ①② 都是「证据源完整性」缺口（文档表 ≠ 全部证据源；首版反例 ≠ 全部日志）；③ 是「选定值正确 ≠ 选择函数正确」的覆盖层缺口。
