@@ -8,6 +8,7 @@ lowering/codegen lives in this namespace and must not depend on
 from __future__ import annotations
 
 from . import cache  # noqa: F401
+from . import runtime  # noqa: F401
 from . import target  # noqa: F401  (registers target normalizer)
 from .bishengir import (  # noqa: F401
     BishengirCompileResult,
@@ -15,11 +16,14 @@ from .bishengir import (  # noqa: F401
     find_bishengir_compiler,
     normalize_compiler_command,
 )
+from .runtime import generate_npu_wrapper_src  # noqa: F401
 
 __all__ = [
     "BishengirCompileResult",
     "cache",
     "compile_mlir",
     "find_bishengir_compiler",
+    "generate_npu_wrapper_src",
     "normalize_compiler_command",
+    "runtime",
 ]
