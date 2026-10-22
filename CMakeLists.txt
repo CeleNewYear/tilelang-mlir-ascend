@@ -396,6 +396,14 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/src/rocm/CMakeLists.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/src/metal/CMakeLists.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/src/webgpu/CMakeLists.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/src/ascend/CMakeLists.txt")
+
+# Ascend 910 (A2) backend. Target registration is always compiled so
+# that `target="ascend910"` is a valid Target even in non-A2 builds.
+file(GLOB TILE_LANG_ASCEND910_ALWAYS_SRCS
+  src/ascend910/*.cc
+)
+list(APPEND TILE_LANG_SRCS ${TILE_LANG_ASCEND910_ALWAYS_SRCS})
+
 list(REMOVE_DUPLICATES TILE_LANG_SRCS)
 
 set(USE_Z3      ON CACHE STRING "Use Z3 SMT solver for TileLang optimizations")
