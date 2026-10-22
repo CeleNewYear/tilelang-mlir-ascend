@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from . import cache  # noqa: F401
 from . import runtime  # noqa: F401
+from .launcher_compile import compile_launcher, launcher_compile_command  # noqa: F401
 from . import target  # noqa: F401  (registers target normalizer)
 from .bishengir import (  # noqa: F401
     BishengirCompileResult,
@@ -21,6 +22,8 @@ from .runtime import generate_npu_wrapper_src  # noqa: F401
 __all__ = [
     "BishengirCompileResult",
     "cache",
+    "compile_launcher",
+    "launcher_compile_command",
     "compile_mlir",
     "find_bishengir_compiler",
     "generate_npu_wrapper_src",
