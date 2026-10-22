@@ -8,3 +8,5 @@
 *.gif binary
 
 *.h linguist-language=C++
+
+*.tar.gz binary
