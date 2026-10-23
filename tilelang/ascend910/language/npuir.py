@@ -72,9 +72,15 @@ def _to_region(data, access_type, extent):
         )
 
 
-def _legalize_dim(buffer: tir.Buffer, dim: int):
+def _legalize_dim(buffer, dim: int):
     if dim < 0:
-        dim = len(buffer.shape) + dim
+        if isinstance(buffer, tir.BufferRegion):
+            rank = len(buffer.region)
+        elif isinstance(buffer, tir.Buffer):
+            rank = len(buffer.shape)
+        else:
+            rank = len(buffer.shape)
+        dim = rank + dim
     return dim
 
 
@@ -717,6 +723,8 @@ def npuir_fill(buffer, value):
 
     if not isinstance(buffer, (tir.Buffer, tir.BufferRegion)):
         raise TypeError("buffer must be a tir.Buffer or tir.BufferRegion")
+    if isinstance(value, (int, float)):
+        value = tir.const(value, buffer.dtype)
     if not isinstance(value, (tir.PrimExpr, tir.BufferLoad)):
         raise TypeError("value must be a tir.PrimExpr or tir.BufferLoad")
 
