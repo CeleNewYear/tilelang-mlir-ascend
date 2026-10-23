@@ -1,6 +1,8 @@
 """Compile-only JIT path for A2."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import tilelang
@@ -24,10 +26,14 @@ def test_compile_only():
         kernel(None, None)
 
 
-def test_compile_artifacts(tmp_path):
+def test_compile_artifacts():
     kernel = tilelang.compile(_copy, target="ascend910")
-    obj, launcher = kernel.adapter.compile_artifacts(str(tmp_path))
-    assert (tmp_path / "kernel.o").is_file()
-    assert (tmp_path / "libkernel_launcher.so").is_file()
+    obj, launcher = kernel.adapter.compile_artifacts()
+    assert Path(obj).is_file()
+    assert Path(launcher).is_file()
     assert obj.endswith("kernel.o")
     assert launcher.endswith(".so")
+    # A second call must reuse the content-addressed cache.
+    obj2, launcher2 = kernel.adapter.compile_artifacts()
+    assert obj2 == obj
+    assert launcher2 == launcher

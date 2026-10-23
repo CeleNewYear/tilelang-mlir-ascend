@@ -106,19 +106,46 @@ class Ascend910KernelAdapter:
             get_npu_launcher_header,
         )
 
-        out = Path(
-            output_dir
-            or os.environ.get("TILELANG_A2_BUILD_DIR")
-            or tempfile.mkdtemp(prefix="tilelang_a2_")
-        )
-        out.mkdir(parents=True, exist_ok=True)
-        result = compile_mlir(
+        from . import cache
+
+        developer = "dev" in str(self.target)
+        hit = cache.load(
             self.device_kernel_source,
-            out,
-            developer="dev" in str(self.target),
-            verbose=self.verbose,
+            pass_configs=self.pass_configs,
+            developer=developer,
         )
-        self.object_path = str(result.object_path)
+        if hit is not None and output_dir is None:
+            out = hit.root
+            self.object_path = str(hit.object_path)
+        else:
+            out = Path(
+                output_dir
+                or os.environ.get("TILELANG_A2_BUILD_DIR")
+                or tempfile.mkdtemp(prefix="tilelang_a2_")
+            )
+            out.mkdir(parents=True, exist_ok=True)
+            result = compile_mlir(
+                self.device_kernel_source,
+                out,
+                developer=developer,
+                verbose=self.verbose,
+            )
+            self.object_path = str(result.object_path)
+            if output_dir is None:
+                cached = cache.save(
+                    cache.make_key(
+                        self.device_kernel_source,
+                        pass_configs=self.pass_configs,
+                        developer=developer,
+                    ),
+                    self.device_kernel_source,
+                    result.object_path,
+                    result.shared_object_path,
+                    pass_configs=self.pass_configs,
+                    developer=developer,
+                )
+                out = cached.root
+                self.object_path = str(cached.object_path)
 
         _, mix_mode = self._metadata()
         workspace = int(os.environ.get("TILELANG_ASCEND_WORKSPACE_SIZE", "0"))
