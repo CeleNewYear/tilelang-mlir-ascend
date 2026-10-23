@@ -25,11 +25,11 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
             with T.Scope("Cube"):
                 bx = cid // n_num * block_M
                 by = cid % n_num * block_N
-                A_BUF = T.alloc_L1([block_M, K_L1], dtype)
-                B_BUF = T.alloc_L1([K_L1, block_N], dtype)
                 C_BUF = T.alloc_L0C([block_M, block_N], accum_dtype)
 
                 for i in T.serial(T.ceildiv(K, K_L1)):
+                    A_BUF = T.alloc_L1([block_M, K_L1], dtype)
+                    B_BUF = T.alloc_L1([K_L1, block_N], dtype)
                     T.load_nd2nz(A[bx, i * K_L1], A_BUF, [block_M, K_L1])
                     T.load_nd2nz(B[i * K_L1, by], B_BUF, [K_L1, block_N])
 

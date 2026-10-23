@@ -21,14 +21,14 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
             with T.Scope("Cube"):
                 bx = cid // T.ceildiv(N, block_N) * block_M
                 by = cid % T.ceildiv(N, block_N) * block_N
-                A_BUF = T.alloc_L1([block_M, K_L1], dtype)
-                B_BUF = T.alloc_L1([K_L1, block_N], dtype)
                 C_BUF = T.alloc_L0C([block_M, block_N], accum_dtype)
 
                 remain_M = T.min(M - bx, block_M)
                 remain_N = T.min(N - by, block_N)
 
                 for i in T.serial(T.ceildiv(K, K_L1)):
+                    A_BUF = T.alloc_L1([block_M, K_L1], dtype)
+                    B_BUF = T.alloc_L1([K_L1, block_N], dtype)
                     remain_K = T.min(K - i * K_L1, K_L1)
                     T.load_nd2nz(A[bx, i * K_L1], A_BUF, [remain_M, remain_K])
                     T.load_nd2nz(B[i * K_L1, by], B_BUF, [remain_K, remain_N])
