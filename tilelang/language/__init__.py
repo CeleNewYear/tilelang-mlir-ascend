@@ -149,3 +149,5 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
     npuir_clear as clear,
     npuir_fill as fill,
 )
+
+from tilelang.ascend910.language.npuir import npuir_reshape as reshape  # noqa: E402,F811
