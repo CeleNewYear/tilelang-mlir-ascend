@@ -1807,9 +1807,74 @@ class FrameStack:
         return len(self._stack)
 
 
+_SCOPE_STACK = []
+
+
+class _NoopScope:
+    """Structural scope with the legacy resource name."""
+
+    def __init__(self, name):
+        self.name = str(name)
+
+    def __enter__(self):
+        _SCOPE_STACK.append(self.name)
+        return self
+
+    def __exit__(self, ptype, value, trace):
+        if _SCOPE_STACK and _SCOPE_STACK[-1] == self.name:
+            _SCOPE_STACK.pop()
+        return False
+
+
+def _scope_name():
+    return _SCOPE_STACK[-1] if _SCOPE_STACK else "Vector"
+
+
 def resource_specialize(resource):
-    raise NotImplementedError("A2 resource_specialize is not ported yet")
+    return _NoopScope(resource)
 
 
 def Scope(name):
-    raise NotImplementedError("A2 mixed-kernel Scope is not ported yet")
+    return _NoopScope(name)
+
+
+def set_flag(other, event_id: int = 0):
+    return tir.call_intrin(
+        "handle", tir.op.Op.get("tl.npuir_set_flag"), _scope_name(), other, event_id
+    )
+
+
+def wait_flag(other, event_id: int = 0):
+    return tir.call_intrin(
+        "handle", tir.op.Op.get("tl.npuir_wait_flag"), other, _scope_name(), event_id
+    )
+
+
+def pipe_barrier(pipe):
+    return tir.call_intrin("handle", tir.op.Op.get("tl.npuir_pipe_barrier"), pipe)
+
+
+def block_barrier(id):
+    return tir.call_intrin(
+        "handle", tir.op.Op.get("tl.npuir_sync_block"), 0, _scope_name(), id
+    )
+
+
+def subblock_barrier(id):
+    return tir.call_intrin(
+        "handle", tir.op.Op.get("tl.npuir_sync_block"), 1, _scope_name(), id
+    )
+
+
+def sync_block_set(id):
+    return tir.call_intrin(
+        "handle", tir.op.Op.get("tl.npuir_sync_block_set"), 2, _scope_name(), id
+    )
+
+
+def sync_block_wait(id):
+    return tir.call_intrin(
+        "handle", tir.op.Op.get("tl.npuir_sync_block_wait"), _scope_name(), id
+    )
+
+rs = resource_specialize

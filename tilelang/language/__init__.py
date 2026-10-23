@@ -107,3 +107,18 @@ _A2_ALIASES = {
 }
 for _alias, _target in _A2_ALIASES.items():
     globals()[_alias] = _make_a2_op(_target)
+
+
+from tilelang.ascend910.language.gemm import gemm  # noqa: E402,F811
+from tilelang.ascend910.language.npuir import Scope, resource_specialize, rs  # noqa: E402,F401
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
+    block_barrier, pipe_barrier, set_flag, subblock_barrier, sync_block_set,
+    sync_block_wait, wait_flag,
+)
+
+from tilelang.ascend910.language import (  # noqa: E402,F401
+    alloc_L0A,
+    alloc_L0B,
+    alloc_L0C,
+    alloc_L1,
+)

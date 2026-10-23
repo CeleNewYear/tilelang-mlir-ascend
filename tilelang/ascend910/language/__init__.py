@@ -118,3 +118,22 @@ vcos = npuir_vcos
 vsin = npuir_vsin
 verf = npuir_verf
 vtanh = npuir_vtanh
+
+
+from tvm.tirx.script.builder.ir import alloc_buffer as _a2_alloc_buffer
+
+
+def alloc_L1(shape, dtype):
+    return _a2_alloc_buffer(shape, dtype, scope="shared.dyn")
+
+
+def alloc_L0A(shape, dtype):
+    return _a2_alloc_buffer(shape, dtype, scope="wmma.matrix_a")
+
+
+def alloc_L0B(shape, dtype):
+    return _a2_alloc_buffer(shape, dtype, scope="wmma.matrix_b")
+
+
+def alloc_L0C(shape, dtype):
+    return _a2_alloc_buffer(shape, dtype, scope="wmma.accumulator")

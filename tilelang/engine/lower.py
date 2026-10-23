@@ -130,6 +130,12 @@ def lower_to_host_device_ir(
             _is_host_call = get_host_call(is_device_c=is_cpu_device_backend(target))
             _is_device_call = get_device_call(is_device_c=is_cpu_device_backend(target))
 
+            if target.kind.name == "ascend910":
+                # The A2 backend owns a single device kernel; its pipeline
+                # already materializes the launch and leaves no host PrimFunc.
+                mod = context.lower(mod)
+                return tvm.IRModule({}), mod, params, target, target_host
+
             # Run backend-independent semantic checks before target-specific lowering.
             PreLowerSemanticCheck(mod)
 
