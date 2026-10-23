@@ -478,13 +478,13 @@ def _ssd_chunk_scan_fwd_kernel(
                             # l0_acc_a (pre-combined pure-name condition;
                             # folds at trace time) --
                             if ONE_AND_ODD:
-                                lt = L_pairs * 2
-                                l0 = lt * bl
-                                tl = T.min(bl, Q - l0)
-                                tmc = T.max(16, T.min(bl, T.ceildiv(tl, 16) * 16))
+                                lt_tail = L_pairs * 2
+                                l0_tail = lt_tail * bl
+                                tl_tail = T.min(bl, Q - l0_tail)
+                                tmc_tail = T.max(16, T.min(bl, T.ceildiv(tl_tail, 16) * 16))
                                 T.copy(
-                                    ws_c[kernel_id, slot, pp, lt, 0:tl, 0:bn],
-                                    l1_c[0:tl, 0:bn],
+                                    ws_c[kernel_id, slot, pp, lt_tail, 0:tl_tail, 0:bn],
+                                    l1_c[0:tl_tail, 0:bn],
                                 )
                                 T.gemm(
                                     l1_c,
@@ -492,13 +492,13 @@ def _ssd_chunk_scan_fwd_kernel(
                                     l0_acc_a,
                                     initC=True,
                                     b_transpose=True,
-                                    size=[tmc, bn, tnp],
+                                    size=[tmc_tail, bn, tnp],
                                 )
-                                for s_blk in T.serial(lt + 1):
+                                for s_blk in T.serial(lt_tail + 1):
                                     s0 = s_blk * bs
                                     ts = T.min(bs, Q - s0)
                                     T.copy(
-                                        ws_lcb[kernel_id, slot, pp, lt, s_blk, 0:bl, 0:ts],
+                                        ws_lcb[kernel_id, slot, pp, lt_tail, s_blk, 0:bl, 0:ts],
                                         l1_band[0:bl, s0 : s0 + ts],
                                     )
                                 T.gemm(
@@ -506,11 +506,11 @@ def _ssd_chunk_scan_fwd_kernel(
                                     l1_x,
                                     l0_acc_a,
                                     initC=False,
-                                    size=[tmc, l0 + tl, tnp],
+                                    size=[tmc_tail, l0_tail + tl_tail, tnp],
                                 )
                                 T.copy(
-                                    l0_acc_a[0:tl, 0:tp],
-                                    out[bz, cs + l0 : cs + l0 + tl, bh, p0 : p0 + tp],
+                                    l0_acc_a[0:tl_tail, 0:tp],
+                                    out[bz, cs + l0_tail : cs + l0_tail + tl_tail, bh, p0 : p0 + tp],
                                 )
 
                         with T.rs("PIPE_FIX"):
