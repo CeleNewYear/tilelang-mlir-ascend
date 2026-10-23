@@ -22,3 +22,12 @@ def test_compile_only():
     assert "func.func" in src
     with pytest.raises(RuntimeError, match="runtime bridge"):
         kernel(None, None)
+
+
+def test_compile_artifacts(tmp_path):
+    kernel = tilelang.compile(_copy, target="ascend910")
+    obj, launcher = kernel.adapter.compile_artifacts(str(tmp_path))
+    assert (tmp_path / "kernel.o").is_file()
+    assert (tmp_path / "libkernel_launcher.so").is_file()
+    assert obj.endswith("kernel.o")
+    assert launcher.endswith(".so")

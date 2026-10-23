@@ -740,3 +740,10 @@ PyMODINIT_FUNC PyInit___tilelang_launcher(void) {{
 """
 
 
+
+
+def get_npu_launcher_header() -> str:
+    """Return the packaged pybind launcher header."""
+    from pathlib import Path
+
+    return str(Path(__file__).resolve().parents[1] / "utils" / "npu_launcher.h")
