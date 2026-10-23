@@ -23,8 +23,8 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 `work/run_golden_suite.py` runs every migrated example with a golden module:
 
 - 34 examples with a matching source file
-- 26 reach canonicalized MLIR (27 emit MLIR; flash expert output hits the
-  known textual-sync parse limitation)
+- 31 reach canonicalized MLIR (all 34 emit MLIR; flash/sparse-MLA outputs
+  hit the known textual-sync parse limitation)
 - 11 are byte-identical to golden after canonicalization:
   `vec_add_1d`, `vec_add_2d`, `vec_add_2d_dynamic_shape`,
   `vec_add_2d_multi_buffer`, `atomic_add`, `atomic_add_dev`,
