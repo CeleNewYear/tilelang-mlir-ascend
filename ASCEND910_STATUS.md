@@ -7,40 +7,41 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 
 | area | module | verification |
 |---|---|---|
-| target | `src/ascend910/target.cc`, `tilelang/ascend910/target.py` | `Target("ascend910")` is a distinct kind. |
-| compiler | `tilelang/ascend910/bishengir.py` | Exact legacy flag order + canonicalizer. |
-| cache | `tilelang/ascend910/cache.py` | Content-addressed MLIR/object cache. |
-| launch source/compile | `tilelang/ascend910/runtime.py`, `launcher_compile.py` | Launcher source byte-identical to golden; host `.so` builds. |
-| codegen | `src/ascend910/target/` | Expert + developer MLIR emitters; registered FFI builders. |
-| frontend | `tilelang/ascend910/language/` | Kernel/copy/alloc APIs, npuir ops, v-aliases, gemm, Scope/rs, sync, reduce, scalar broadcast. |
-| pipeline | `tilelang/ascend910/pipeline.py` | BindTarget, symbolic params, MaterializeKernelLaunch, allocation placement, LowerOpaqueBlock, Simplify. |
-| lowering | `tilelang/engine/lower.py` | A2 bypasses the CUDA host/device split and calls codegen directly. |
-| JIT | `tilelang/ascend910/adapter.py` | `tilelang.compile(target="ascend910")` returns a JITKernel with MLIR; launch raises until the runtime bridge is connected. |
-| examples | `examples/` | Legacy A2 examples migrated to `target="ascend910"`; `is_npu=True` removed. |
+| target | `src/ascend910/target.cc`, `tilelang/ascend910/target.py` | `ascend910`/`A2`/`npuir` normalize to one target kind. |
+| compiler | `tilelang/ascend910/bishengir.py` | Exact legacy flags + canonicalizer. |
+| cache | `tilelang/ascend910/cache.py` | MLIR/object content-addressed cache, used by the JIT adapter. |
+| launch generation | `tilelang/ascend910/runtime.py`, `launcher_compile.py` | Byte-compatible wrapper source; host launcher `.so` builds. |
+| codegen | `src/ascend910/target/` | Expert + developer MLIR emitters; bool/tirx arithmetic fixes. |
+| frontend | `tilelang/ascend910/language/` | Kernel/copy/alloc APIs, npuir ops, v-aliases, gemm, Scope/rs, sync, reduce, clear/fill. |
+| pipeline | `tilelang/ascend910/pipeline.py` | BindTarget, symbolic params, allocation placement, MaterializeKernelLaunch, LowerOpaqueBlock, Simplify. |
+| lowering | `tilelang/engine/lower.py` | A2 bypasses the CUDA host/device split. |
+| JIT | `tilelang/ascend910/adapter.py` | `tilelang.compile` → MLIR → `kernel.o` → `libkernel_launcher.so`, cached. Device load/launch is the remaining bridge. |
+| examples | `examples/` | Legacy A2 examples migrated to `target="ascend910"`. |
 
-### End-to-end
+### Golden suite
 
-- `vec_add_1d`: expert and developer MLIR byte-identical to golden.
-- `vec_add_2d`: MLIR byte-identical to golden after canonicalization.
-- `vec_add_2d_dynamic_shape.py`: MLIR byte-identical to golden after
-  canonicalization (allocation placement now matches).
-- `example_elementwise_add.py`, `example_elementwise_exp2.py`,
-  `example_elementwise_log2.py`, `vec_add_auto_brc.py`, `example_gemv.py`,
-  `example_mixcv.py`: frontend → codegen succeeds.
-- `flash_attn_npuir.py`: frontend now builds the full TIR; codegen reports a
-  missing `l1_a` buffer binding, which is the remaining mixed Cube/Vector
-  function-splitting issue.
-- 17 unit tests pass, including compile-only JIT and 2-D/dynamic golden MLIR.
+`work/run_golden_suite.py` runs every migrated example with a golden module:
+
+- 34 examples with a matching source file
+- 26 reach canonicalized MLIR
+- 11 are byte-identical to golden after canonicalization:
+  `vec_add_1d`, `vec_add_2d`, `vec_add_2d_dynamic_shape`,
+  `vec_add_2d_multi_buffer`, `atomic_add`, `atomic_add_dev`,
+  `elementwise_add`, `elementwise_exp2`, `elementwise_log2`,
+  `ada_layer_norm_and_zero`, `rms_norm`, `fp8_lighting_indexer`
+- Remaining differences are mostly allocation/attribute ordering and a few
+  mixed-kernel/frontend semantics (flash, sparse-MLA, some TileOPs kernels).
+
+Unit tests: **19 passed**, including compile-only JIT, cached object/launcher
+compilation, and 2-D/dynamic golden MLIR.
 
 ## Remaining
 
-1. Fix the flash mixed-kernel split: L1/L0 allocations are found once cube
-   scopes are inferred, but a single AIC/AIV function still misses UB buffers
-   (`logsum`); the proper `resource_scope` function split is the next step.
-2. Connect `bishengir.py`, `runtime.py`, `launcher_compile.py` and `cache.py`
-   into a real A2 execution backend (currently compile-only).
-3. Port A2 autotune search configuration.
-4. Full golden comparison and re-enable the original CI workflows.
+1. Mixed Cube/Vector resource-scope splitting for flash/sparse-MLA.
+2. A2 device load/launch bridge (`NPUUtils.load_binary`) — requires NPU host.
+3. Autotune profiling on A2.
+4. Remaining golden diffs (allocation order, O2 attribute ordering).
+5. CI workflows (need the AscendNPU-IR/TVM build and NPU runner images).
 
 ## Environment
 
