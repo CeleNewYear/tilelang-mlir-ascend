@@ -2,7 +2,7 @@
   "examples": 34,
   "emit_mlir": 34,
   "canonicalized": 34,
-  "golden_equal": 11,
+  "golden_equal": 13,
   "rows": [
     {
       "name": "TileOPs__tileops__kernels__elementwise__lerp_tensor__lerp_tensor_kernel___make_lerp_tensor_kernel",
@@ -203,16 +203,16 @@
     {
       "name": "gemm__matmul",
       "status": "ok",
-      "golden_equal": false,
+      "golden_equal": true,
       "golden_bytes": 5309,
-      "new_bytes": 5305
+      "new_bytes": 5309
     },
     {
       "name": "gemm__matmul_dynamic_shape",
       "status": "ok",
-      "golden_equal": false,
+      "golden_equal": true,
       "golden_bytes": 7972,
-      "new_bytes": 7968
+      "new_bytes": 7972
     },
     {
       "name": "mixcv__mixcv_mixkernel",

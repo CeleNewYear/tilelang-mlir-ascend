@@ -24,7 +24,7 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 
 - 34 examples with a matching source file
 - 34 emit MLIR and 34 canonicalize
-- 11 are byte-identical
+- 13 are byte-identical
 - 11 are byte-identical to golden after canonicalization:
   `vec_add_1d`, `vec_add_2d`, `vec_add_2d_dynamic_shape`,
   `vec_add_2d_multi_buffer`, `atomic_add`, `atomic_add_dev`,

@@ -38,7 +38,7 @@ At the current commit:
 
 - 34 corpus examples have a matching migrated source file
 - all 34 emit MLIR and canonicalize
-- 11 are byte-identical
+- 13 are byte-identical
 
 Byte-identical:
 
