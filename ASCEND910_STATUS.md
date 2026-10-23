@@ -54,3 +54,18 @@ compilation, and 2-D/dynamic golden MLIR.
 - CANN 9.3 weekly, `bishengir-compile`/`bishengir-opt`
 - AscendNPU-IR `31f690369d1247fbd5529a3f88b758f7d470ae4f`
 - 16 build jobs
+
+
+## External blockers
+
+- No Ascend 910 device is available in this WSL checkout. `torch_npu` fails to
+  import (`libhccl.so` / missing Hccl symbols), so `NPUUtils.load_binary`,
+  device launch and autotune profiling cannot be executed or verified.
+- The remaining 21 golden modules were produced with a different backend
+  configuration (A5-style `cbuf`/`zero` address spaces, AIC-only output, or
+  hand-written polynomial approximations) and are not reproducible from the A2
+  target. `golden/a2/LAST_RUN.json` records the per-example byte sizes.
+- There is no GitHub token/`gh` authentication and no sendmail/SMTP transport,
+  so the prepared PR/email drafts cannot be delivered from this host.
+- CI needs the AscendNPU-IR/TVM wheel build and a self-hosted NPU runner; the
+  local checkout has neither.
