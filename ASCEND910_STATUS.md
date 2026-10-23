@@ -30,12 +30,13 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 - `flash_attn_npuir.py`: frontend now builds the full TIR; codegen reports a
   missing `l1_a` buffer binding, which is the remaining mixed Cube/Vector
   function-splitting issue.
-- 15 unit tests pass, including compile-only JIT.
+- 17 unit tests pass, including compile-only JIT and 2-D/dynamic golden MLIR.
 
 ## Remaining
 
-1. Fix the flash `l1_a` binding: mixed-kernel function/core-type splitting and
-   L1 allocation handling.
+1. Fix the flash mixed-kernel split: L1/L0 allocations are found once cube
+   scopes are inferred, but a single AIC/AIV function still misses UB buffers
+   (`logsum`); the proper `resource_scope` function split is the next step.
 2. Connect `bishengir.py`, `runtime.py`, `launcher_compile.py` and `cache.py`
    into a real A2 execution backend (currently compile-only).
 3. Port A2 autotune search configuration.
