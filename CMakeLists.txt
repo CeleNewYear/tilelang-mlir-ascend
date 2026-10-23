@@ -397,12 +397,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/src/metal/CMakeLists.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/src/webgpu/CMakeLists.txt")
 include("${CMAKE_CURRENT_SOURCE_DIR}/src/ascend/CMakeLists.txt")
 
-# Ascend 910 (A2) backend. Target registration is always compiled so
-# that `target="ascend910"` is a valid Target even in non-A2 builds.
-file(GLOB TILE_LANG_ASCEND910_ALWAYS_SRCS
-  src/ascend910/*.cc
-)
-list(APPEND TILE_LANG_SRCS ${TILE_LANG_ASCEND910_ALWAYS_SRCS})
+# Ascend 910 (A2) backend. Target registration is always compiled; the
+# MLIR code generators are gated by USE_ASCEND910.
+include("${CMAKE_CURRENT_SOURCE_DIR}/src/ascend910/CMakeLists.txt")
 
 list(REMOVE_DUPLICATES TILE_LANG_SRCS)
 
@@ -522,6 +519,15 @@ if(WIN32)
 else()
   add_library(tilelang SHARED $<TARGET_OBJECTS:tilelang_objs>)
   target_link_libraries(tilelang PUBLIC tvm_compiler)
+
+  if(TILELANG_ASCEND910_ENABLED)
+    target_link_libraries(tilelang PRIVATE
+      -Wl,--start-group
+      ${TILELANG_ASCEND910_NPUIR_LIBS}
+      -Wl,--end-group
+      zstd z
+    )
+  endif()
 
   # Place dev build outputs under build/lib for consistency
   set_target_properties(tilelang PROPERTIES
