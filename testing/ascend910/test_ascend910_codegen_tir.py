@@ -43,12 +43,13 @@ def test_vec_add_tir_emits_hivm(monkeypatch, mode):
         assert "#hivm.address_space<gm>" not in src
 
 
-def test_vec_add_expert_matches_golden_after_canonicalize(monkeypatch):
+@pytest.mark.parametrize("mode", ["expert", "developer"])
+def test_vec_add_matches_golden_after_canonicalize(monkeypatch, mode):
     from tilelang.ascend910.bishengir import canonicalize_mlir
 
-    monkeypatch.setenv("TILELANG_ASCEND_MODE", "expert")
+    monkeypatch.setenv("TILELANG_ASCEND_MODE", mode)
     mod = from_source((ROOT / "vec_add_1d_clean.tir").read_text())
     out = ASCEND910_CODEGEN.lower(mod, Target("ascend910"), compile_device=False)
     got = canonicalize_mlir(out.inspect_source()).strip()
-    golden = (ROOT.parent / "expert" / "elementwise__vec_add_1d" / "000_main.mlir").read_text().strip()
-    assert got == golden
+    gpath = (ROOT / "vec_add_1d.mlir") if mode == "expert" else (ROOT / "vec_add_1d_dev.golden.mlir")
+    assert got == gpath.read_text().strip()
