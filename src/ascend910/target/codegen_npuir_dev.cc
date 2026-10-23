@@ -3843,6 +3843,16 @@ mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const CallNode *op) {
     return ScalarLogCodegen(op);
   } else if (op->op.same_as(Op::Get("tir.log2"))) {
     return ScalarLog2Codegen(op);
+  } else if (op->op.as<OpNode>() &&
+             (op->op.as<OpNode>()->name == "tirx.if_then_else" ||
+              op->op.as<OpNode>()->name == "tir.if_then_else")) {
+    auto condition = MakeValue(op->args[0]);
+    auto true_value = MakeValue(op->args[1]);
+    auto false_value = MakeValue(op->args[2]);
+    if (condition && true_value && false_value) {
+      return builder.create<mlir::arith::SelectOp>(
+          builder.getUnknownLoc(), condition, true_value, false_value);
+    }
   }
   return mlir::Value();
 }
@@ -4456,10 +4466,17 @@ void CodeGenTileLangNPUIRDEV::VisitStmt_(const BufferStoreNode *op) {
   auto mem = GetVarValue(buffer->data.get());
 
   auto mlir_value = MakeValue(value);
+  if (!mlir_value) {
+    return;
+  }
 
   SmallVector<mlir::Value> convert_inds;
   for (auto index : indices) {
-    mlir::Value indexVal = CreateIndexCastOp(MakeValue(index));
+    auto idx_val = MakeValue(index);
+    if (!idx_val) {
+      return;
+    }
+    mlir::Value indexVal = CreateIndexCastOp(idx_val);
     convert_inds.push_back(indexVal);
   }
 
