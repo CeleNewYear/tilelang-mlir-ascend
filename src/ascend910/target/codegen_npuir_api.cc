@@ -1133,10 +1133,6 @@ CodeGenTileLangNPUIRAPI::BuildSliceFacts(Buffer buffer_data,
   // fixed starting point so the projected view offset stays well-defined.
   ICHECK(!mlir::ShapedType::isDynamic(layoutAttr.getOffset()))
       << "generic T.copy requires a statically-known base layout offset.";
-  // Keep the generic path intentionally narrow: contiguous buffers only.
-  ICHECK(buffer_data->strides.empty())
-      << "generic T.copy only supports contiguous buffers; explicit buffer "
-         "strides are unsupported.";
 
   facts.baseLayoutOffset = layoutAttr.getOffset();
   llvm::SmallVector<PrimExpr> shapeExprs(buffer_data->shape.begin(),
@@ -2732,6 +2728,14 @@ void CodeGenTileLangNPUIRAPI::VisitStmt_(const BindNode *op) {
 void CodeGenTileLangNPUIRAPI::VisitStmt_(const AttrStmtNode *op) {
   if (op->attr_key == "thread_extent") {
     IterVar iv = Downcast<IterVar>(op->node);
+    if ((iv->thread_tag == "blockIdx.x" || iv->thread_tag == "blockIdx.y" ||
+         iv->thread_tag == "blockIdx.z") &&
+        !tirx::UsesVar(op->body, [&](const VarNode *v) {
+          return v == iv->var.get();
+        })) {
+      VisitStmt(op->body);
+      return;
+    }
     if (iv->thread_tag == "blockIdx.x" && iv->var->name_hint != "_") {
       mlir::Value indexOp = GetAndCastIndexOp<mlir::hivm::GetBlockIdxOp>(iv);
       var_map_[iv->var.get()] = indexOp;

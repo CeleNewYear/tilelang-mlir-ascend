@@ -1323,6 +1323,14 @@ void CodeGenTileLangNPUIR::VisitStmt_(const BindNode *op) {
 void CodeGenTileLangNPUIR::VisitStmt_(const AttrStmtNode *op) {
   if (op->attr_key == "thread_extent") {
     IterVar iv = Downcast<IterVar>(op->node);
+    if ((iv->thread_tag == "blockIdx.x" || iv->thread_tag == "blockIdx.y" ||
+         iv->thread_tag == "blockIdx.z") &&
+        !tirx::UsesVar(op->body, [&](const VarNode *v) {
+          return v == iv->var.get();
+        })) {
+      VisitStmt(op->body);
+      return;
+    }
     if (iv->thread_tag == "blockIdx.x" && iv->var->name_hint != "_") {
       this->block_id_ = AllocVarID(iv->var.get());
       this->PrintIndent();

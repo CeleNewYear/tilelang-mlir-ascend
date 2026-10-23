@@ -9,6 +9,7 @@
 #define TVM_TL_TARGET_CODEGEN_CUDA_H_
 
 #include <tvm/target/codegen.h>
+#include <tvm/tirx/analysis.h>
 #include <tvm/tirx/expr.h>
 #include <tvm/tirx/op.h>
 
