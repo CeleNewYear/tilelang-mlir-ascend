@@ -20,6 +20,18 @@ set(TILELANG_CMAKELISTS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 project(TILE_LANG C CXX)
 
+# Legacy NPUIR build compatibility. The upstream CI writes build/config.cmake and
+# enables USE_NPUIR; map that to the v0.1.15 A2 backend switch.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/build/config.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/build/config.cmake)
+endif()
+if(USE_NPUIR)
+  set(USE_ASCEND910 ON CACHE BOOL "" FORCE)
+endif()
+if(BISHENGIR_PATH AND NOT BISHENGIR_ROOT_PATH)
+  set(BISHENGIR_ROOT_PATH "${BISHENGIR_PATH}" CACHE PATH "" FORCE)
+endif()
+
 # Detect CUDA toolkit: tries host installation first, then falls back to
 # pip-installed packages (env WITH_PIP_CUDA_TOOLCHAIN or auto-detect). This has to
 # run after project() so that an enabled language is available -- FindCUDAToolkit's
