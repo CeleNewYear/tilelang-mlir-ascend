@@ -1,296 +1,260 @@
-# ruff: noqa
-import itertools
-import tilelang
-from tilelang import language as T
+# Copyright (c) Huawei Technologies Co., Ltd. 2025.
+import argparse
 import torch
-from utils import generate_random_cu_seqlens, per_custom_dims_cast_to_fp8
 
 
-def display_error_message(msg):
-    print(f"\033[31mWARNING: {msg}\033[0m")
+import tilelang
+import tilelang.language as T
+
+tilelang.cache.clear_cache()
 
 
-def compute_correlation(a, b, label="tensor"):
-    a, b = a.data.double(), b.data.double()
-    norm_sum = (a * a + b * b).sum()
-    if norm_sum == 0:
-        display_error_message(f"{label} all zero")
-        return 1
-    correlation = 2 * (a * b).sum() / norm_sum
-    return correlation
-
-
-def validate_tensor_match(a, b, tolerance=1e-8, tensor_name="tensor", should_raise=True):
-    a_finite = torch.isfinite(a)
-    b_finite = torch.isfinite(b)
-    if not torch.all(a_finite == b_finite):
-        display_error_message(f"{tensor_name} Error: isfinite mask mismatch")
-        if should_raise:
-            assert False
-    if not torch.isclose(
-        a.masked_fill(a_finite, 0),
-        b.masked_fill(b_finite, 0),
-        rtol=0,
-        atol=0,
-        equal_nan=True,
-    ).all():
-        display_error_message(f"{tensor_name} Error: nonfinite value mismatch")
-        if should_raise:
-            assert False
-    a = a.masked_fill(~a_finite, 0)
-    b = b.masked_fill(~b_finite, 0)
-    correlation = compute_correlation(a, b, tensor_name)
-    difference = 1.0 - correlation
-    if not (0 <= difference <= tolerance):
-        display_error_message(f"{tensor_name} Error: {difference}")
-        if should_raise:
-            assert False
-    return difference
-
-
-def get_configs():
-    iter_params = dict(
-        block_N=[32, 64, 128],
-        num_stages=[0, 1, 2],
-        threads=[128, 256],
-        block_Q=[1, 2, 4],
-    )
-    return [{k: v for k, v in zip(iter_params, values)} for values in itertools.product(*iter_params.values())]
-
-
-class SupplyProg:
-    def __init__(self):
-        self.tensors_dict = {}
-
-    def get_key(self, shape, dtype) -> str:
-        return f"{shape}-{dtype}"
-
-    def supply_prog(self, params):
-        shapes = [p.shape for p in params]
-        dtypes = [p.dtype for p in params]
-        tensor_list = []
-        for shape, dtype in zip(shapes, dtypes):
-            key = self.get_key(shape, dtype)
-            if key not in self.tensors_dict:
-                self.tensors_dict[key] = torch.randn(shape, dtype=dtype, device="cuda")
-                tensor_list.append(self.tensors_dict[key])
-            else:
-                tensor_list.append(self.tensors_dict[key])
-        return tensor_list
-
-
-supply_prog = SupplyProg()
-
-
-@tilelang.jit(
-    pass_configs={
-        tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
-    },
+parser = argparse.ArgumentParser(description="NPU Kernel Compilation")
+parser.add_argument("--b", type=int, default=2, help="Matrix B dimension")
+parser.add_argument("--m", type=int, default=2048, help="Matrix M dimension")
+parser.add_argument("--n", type=int, default=4096, help="Matrix N dimension")
+parser.add_argument("--k", type=int, default=64, help="Matrix K dimension")
+parser.add_argument("--h", type=int, default=32, help="Matrix H dimension")
+parser.add_argument("--bs", type=int, default=64, help="Matrix bs dimension")
+parser.add_argument(
+    "--nums_kernel", type=int, default=24, help="number of enabled cores"
 )
-def mqa_attn_return_logits(
-    IndexQ,
-    IndexK,
-    IndexKScale,
-    Weights,
-    CuSeqLenKS,
-    CuSeqLenKE,
-    block_N=256,
-    num_stages=3,
-    threads=512,
-    block_Q=None,
+args = parser.parse_args()
+
+B = args.b
+M = args.m
+N = args.n
+K = args.k
+H = args.h
+
+BLOCK_SIZE_N = args.bs
+nums_kernel = args.nums_kernel
+
+
+def fp8_lighting_indexer(B, H, M, N, K, BLOCK_SIZE_N, nums_kernel):
+    m_num = M
+    n_num = N // BLOCK_SIZE_N
+    num_logic_kernels = m_num * n_num
+    dtype = "float16"
+    accum_dtype = "float32"
+    FFTS_FLAG_THRESHOLD = 15
+
+    @T.prim_func
+    def main(
+        q_ptr: T.Tensor((B * M * H, K), dtype),
+        k_ptr: T.Tensor((B * N * 1, K), dtype),
+        o_ptr: T.Tensor((B * M, N), dtype),
+        q_s_ptr: T.Tensor((M * H, 1), dtype),
+        k_s_ptr: T.Tensor((1, N), dtype),
+        workspace: T.Tensor((B * M * H, N), dtype),
+        mask: T.Tensor((B * M, N), dtype),
+    ):
+
+        with T.Kernel(nums_kernel) as (kernel_id, subid):
+            with T.Scope("Cube"):
+                for task_id in T.serial(T.ceildiv(m_num * n_num, nums_kernel)):
+                    cid = task_id * nums_kernel + kernel_id
+                    if cid < num_logic_kernels:
+                        mi = cid // n_num
+                        ni = cid % (n_num)
+                        offset_n = ni * BLOCK_SIZE_N
+
+                        for bi in T.serial(B):
+                            q = T.alloc_L1((H, K), dtype)
+                            k = T.alloc_L1((BLOCK_SIZE_N, K), dtype)
+                            l0_c = T.alloc_L0C((H, BLOCK_SIZE_N), accum_dtype)
+
+                            offset = (bi * M + mi) * H
+                            T.load_nd2nz(q_ptr[offset, 0], q, [H, K])
+
+                            offset = bi * N + offset_n
+                            T.load_nd2nz(k_ptr[offset, 0], k, [BLOCK_SIZE_N, K])
+                            T.gemm(
+                                q,
+                                k,
+                                l0_c,
+                                initC=True,
+                                b_transpose=True,
+                                size=[H, K, BLOCK_SIZE_N],
+                            )
+
+                            with T.rs("PIPE_FIX"):
+                                offset = (bi * M + mi) * H
+                                T.store_fixpipe(
+                                    l0_c,
+                                    workspace[offset, offset_n],
+                                    size=[H, BLOCK_SIZE_N],
+                                    enable_nz2nd=True,
+                                    pre_relu_mode="relu",
+                                )
+                                T.sync_block_set(0)
+
+                            flag = (task_id * B + bi) % FFTS_FLAG_THRESHOLD
+                            temp = FFTS_FLAG_THRESHOLD - 1
+                            if flag == temp:
+                                with T.rs("PIPE_FIX"):
+                                    T.sync_block_wait(0)
+
+            with T.Scope("Vector"):
+                for task_id in T.serial(T.ceildiv(m_num * n_num, nums_kernel)):
+                    cid = task_id * nums_kernel + kernel_id
+                    if cid < num_logic_kernels:
+                        mi = cid // n_num
+                        ni = cid % (n_num)
+                        offset_n = ni * BLOCK_SIZE_N
+
+                        for bi in T.serial(B):
+                            q_s = T.alloc_ub((H, 1), dtype)
+                            q_s_32 = T.alloc_ub((H, 1), accum_dtype)
+                            k_s = T.alloc_ub((1, BLOCK_SIZE_N), dtype)
+                            k_s_32 = T.alloc_ub((1, BLOCK_SIZE_N), accum_dtype)
+                            msk = T.alloc_ub((1, BLOCK_SIZE_N), dtype)
+                            msk_32 = T.alloc_ub((1, BLOCK_SIZE_N), accum_dtype)
+
+                            logits = T.alloc_ub((1, BLOCK_SIZE_N), dtype)
+                            logits_32 = T.alloc_ub((1, BLOCK_SIZE_N), accum_dtype)
+                            o_temp = T.alloc_ub((1, BLOCK_SIZE_N), accum_dtype)
+                            scores_sum = T.alloc_ub((1, BLOCK_SIZE_N), accum_dtype)
+                            ub_relu = T.alloc_ub((H, BLOCK_SIZE_N), dtype)
+                            ub_relu_32 = T.alloc_ub((H, BLOCK_SIZE_N), accum_dtype)
+                            temp = T.alloc_ub((H, BLOCK_SIZE_N), accum_dtype)
+
+                            with T.rs("PIPE_MTE2"):
+                                T.sync_block_wait(0)
+                                offset = (bi * M + mi) * H
+                                T.copy(
+                                    workspace[
+                                        offset : offset + H,
+                                        offset_n : offset_n + BLOCK_SIZE_N,
+                                    ],
+                                    ub_relu,
+                                )
+                                T.vcast(ub_relu, ub_relu_32, round_mode="rint")
+
+                                T.copy(q_s_ptr[mi * H : (mi + 1) * H, 0:1], q_s)
+                                T.vcast(q_s, q_s_32, round_mode="rint")
+
+                                T.copy(
+                                    k_s_ptr[0:1, offset_n : offset_n + BLOCK_SIZE_N],
+                                    k_s,
+                                )
+                                T.vcast(k_s, k_s_32, round_mode="rint")
+
+                                T.vmul(ub_relu_32, q_s_32, temp)
+
+                                T.reduce(temp, scores_sum, dims=[0], reduce_mode="sum")
+                                T.vmul(scores_sum, k_s_32, o_temp)
+
+                            flag = (task_id * B + bi) % FFTS_FLAG_THRESHOLD
+                            temp = FFTS_FLAG_THRESHOLD - 1
+                            if flag == temp:
+                                with T.rs("PIPE_MTE2"):
+                                    T.sync_block_set(0)
+
+                            offset = bi * M + mi
+                            T.copy(
+                                mask[
+                                    offset : offset + 1,
+                                    offset_n : offset_n + BLOCK_SIZE_N,
+                                ],
+                                msk,
+                            )
+
+                            T.vcast(msk, msk_32, round_mode="rint")
+                            T.vadd(msk_32, o_temp, logits_32)
+
+                            T.vcast(logits_32, logits, round_mode="rint")
+                            T.copy(
+                                logits,
+                                o_ptr[
+                                    offset : offset + 1,
+                                    offset_n : offset_n + BLOCK_SIZE_N,
+                                ],
+                            )
+
+    return main
+
+
+def ref_fp8_index(
+    q_ptr: torch.Tensor,
+    q_s_ptr: torch.Tensor,
+    k_ptr: torch.Tensor,
+    k_s_ptr: torch.Tensor,
+    mask: torch.Tensor,
 ):
-    heads, index_dim = T.const("heads, index_dim")
 
-    if block_Q is None:
-        block_Q = 128 // heads
-    dtype = T.float8_e4m3fn
-    accum_dtype = T.float32
-    index_dtype = T.int32
+    # q_ptr: (B, M, H, K)
+    # q_s_ptr: (M*H)
+    # k_ptr: (B, N, K)
+    # k_s_ptr: (N)
+    q_s = q_s_ptr.view(M, H)
 
-    seq_len = T.dynamic("seq_len")
-    seq_len_kv = T.dynamic("seq_len_kv")
+    k_ptr = k_ptr.transpose(1, 2)
 
-    index_q_shape = [seq_len * heads, index_dim]
-    index_k_shape = [seq_len_kv, index_dim]
-    index_k_scale_shape = [seq_len_kv]
-    logits_shape = [seq_len, seq_len_kv]
+    q_reshaped = q_ptr.view(B, M * H, K)
+    q_reshaped.to(dtype=torch.float16)
+    temp = torch.matmul(q_reshaped, k_ptr)  # (B, M * H, N)
+    temp = temp.view(B, M, H, N)
+    temp_relu = torch.relu(temp)
+    temp_relu = temp_relu.to(dtype=torch.float32)
 
-    IndexQ: T.Tensor(index_q_shape, dtype)  # type: ignore
-    IndexK: T.Tensor(index_k_shape, dtype)  # type: ignore
-    IndexKScale: T.Tensor(index_k_scale_shape, accum_dtype)  # type: ignore
-    Logits = T.empty(logits_shape, accum_dtype)
-    Weights: T.Tensor([seq_len, heads], accum_dtype)  # type: ignore
-    CuSeqLenKS: T.Tensor([seq_len], index_dtype)  # type: ignore
-    CuSeqLenKE: T.Tensor([seq_len], index_dtype)  # type: ignore
+    temp_temp = temp_relu * q_s[None, :, :, None]  # q_s维度扩展为(1, M, H, 1)
 
-    with T.Kernel(T.ceildiv(seq_len, block_Q), threads=threads) as bx:
-        index_q_shared = T.alloc_shared([block_Q * heads, index_dim], dtype)
-        index_k_shared = T.alloc_shared([block_N, index_dim], dtype)
-        index_k_scale_fragment = T.alloc_fragment([block_N], accum_dtype)
-        s = T.alloc_fragment([block_N, block_Q * heads], accum_dtype)
-        s_reshaped = T.reshape(s, (block_N, block_Q, heads))
-        logits = T.alloc_fragment([block_N, block_Q], accum_dtype)
-        weights = T.alloc_fragment([block_Q, heads], accum_dtype)
+    o_temp = torch.sum(temp_temp, dim=2)  # (B, M, N)
+    o_temp_temp = o_temp * k_s_ptr[None, None, :]  # k_s_ptr 维度扩展为 (1, 1, N)
 
-        seq_len_i = bx * block_Q
-
-        cu_k_s_min = T.alloc_var(index_dtype)
-        cu_k_e_max = T.alloc_var(index_dtype)
-
-        cu_k_s_min = 2147483647
-        cu_k_e_max = -2147483648
-
-        for bq_i in T.serial(block_Q):
-            cu_k_s_min = T.min(cu_k_s_min, T.min(CuSeqLenKS[seq_len_i + bq_i], seq_len_kv))
-        for bq_i in T.serial(block_Q):
-            cu_k_e_max = T.max(cu_k_e_max, T.min(CuSeqLenKE[seq_len_i + bq_i], seq_len_kv))
-
-        T.copy(IndexQ[seq_len_i * heads, 0], index_q_shared)
-        T.copy(Weights[seq_len_i, 0], weights)
-
-        for nbn_i in T.Pipelined(T.ceildiv(cu_k_e_max - cu_k_s_min, block_N), num_stages=num_stages):
-            T.copy(IndexK[cu_k_s_min + nbn_i * block_N, 0], index_k_shared)
-            T.copy(IndexKScale[cu_k_s_min + nbn_i * block_N], index_k_scale_fragment)
-
-            T.gemm(
-                index_k_shared,
-                index_q_shared,
-                s,
-                transpose_B=True,
-                clear_accum=True,
-                policy=T.GemmWarpPolicy.FullCol,
-            )
-
-            for bn_i, bq_i, h_i in T.Parallel(block_N, block_Q, heads):
-                s_reshaped[bn_i, bq_i, h_i] = (T.max(s_reshaped[bn_i, bq_i, h_i], 0) * weights[bq_i, h_i]) * index_k_scale_fragment[bn_i]
-
-            T.reduce_sum(s_reshaped, logits, dim=-1, clear=True)
-
-            for bq_i, bn_i in T.Parallel(block_Q, block_N):
-                Logits[seq_len_i + bq_i, cu_k_s_min + nbn_i * block_N + bn_i] = logits[bn_i, bq_i]
-
-    return Logits
-
-
-@tilelang.jit
-def clean_logits_(
-    Logits,
-    CuSeqLenKS,
-    CuSeqLenKE,
-    threads: int = 512,
-    block_K: int = 4096,
-):
-    seq_len = T.dynamic("seq_len")
-    seq_len_kv = T.dynamic("seq_len_kv")
-
-    dtype = T.float
-    indices_dtype = T.int32
-
-    Logits: T.Tensor([seq_len, seq_len_kv], dtype)  # type: ignore
-    CuSeqLenKS: T.Tensor([seq_len], indices_dtype)  # type: ignore
-    CuSeqLenKE: T.Tensor([seq_len], indices_dtype)  # type: ignore
-
-    with T.Kernel(seq_len, threads=threads) as bx:
-        tx = T.thread_binding(0, threads, thread="threadIdx.x")
-        cu_k_s = CuSeqLenKS[bx]
-        cu_k_e = CuSeqLenKE[bx]
-
-        for n_i in T.Pipelined(T.ceildiv(seq_len_kv, block_K)):
-            for k_i in T.serial(block_K // threads):
-                idx = n_i * block_K + k_i * threads + tx
-                if idx < cu_k_s or idx >= cu_k_e:
-                    Logits[bx, idx] = -T.infinity(dtype)
-
-
-def mqa_attn_return_logits_interface(q, kv, kv_scales, weights, cu_seqlen_ks, cu_seqlen_ke, clean_logits=True):
-    seq_len, heads, index_dim = q.shape
-    seq_len_kv = kv.shape[0]
-
-    logits = mqa_attn_return_logits(
-        q.view(seq_len * heads, index_dim),
-        kv,
-        kv_scales,
-        weights,
-        cu_seqlen_ks,
-        cu_seqlen_ke,
-    )
-    if clean_logits:
-        clean_logits_(logits, cu_seqlen_ks, cu_seqlen_ke)
-    return logits
-
-
-def ref_fp8_mqa_logits(q: torch.Tensor, kv: torch.Tensor, weights: torch.Tensor, cu_seqlen_ks: torch.Tensor, cu_seqlen_ke: torch.Tensor):
-    k = kv
-    q = q.float()
-    k = k.float()
-
-    seq_len_kv = kv.shape[0]
-    mask_lo = torch.arange(0, seq_len_kv, device="cuda")[None, :] >= cu_seqlen_ks[:, None]
-    mask_hi = torch.arange(0, seq_len_kv, device="cuda")[None, :] < cu_seqlen_ke[:, None]
-    mask = mask_lo & mask_hi
-
-    score = torch.einsum("mhd,nd->hmn", q, k)
-    logits = (score.relu() * weights.unsqueeze(-1).transpose(0, 1)).sum(dim=0)
-    logits = logits.masked_fill(~mask, float("-inf"))
-
-    cost = mask.sum()
-    return logits, cost
-
-
-def test_fp8_lighting_indexer(S=4096, SKV=8192, H=32, HKV=1, D=64, kv_stride=1):
-    # initial random seed to make the performance reproducible
-    torch.manual_seed(0)
-    q = torch.randn(S, H, D, device="cuda", dtype=torch.bfloat16).to(torch.bfloat16)
-    kv = torch.randn(SKV, D, device="cuda", dtype=torch.bfloat16).to(torch.bfloat16)
-    weights = torch.randn(S, H, device="cuda", dtype=torch.float32)
-    p = (torch.randn(S, SKV, device="cuda", dtype=torch.float32) * 4).softmax(dim=-1)
-
-    ks, ke = generate_random_cu_seqlens(per_cp_seqlen=S, cp_size=4, cp_rank=3, kv_stride=kv_stride, average_q_len=2048)
-
-    logits_ref, cost_ref = ref_fp8_mqa_logits(q=q, kv=kv, weights=weights, cu_seqlen_ks=ks, cu_seqlen_ke=ke)
-
-    q_fp8 = q.to(torch.float8_e4m3fn)
-    kv_fp8, kv_scales = per_custom_dims_cast_to_fp8(kv, (0,), False)
-
-    logits_tl = mqa_attn_return_logits_interface(q=q_fp8, kv=kv_fp8, kv_scales=kv_scales, weights=weights, cu_seqlen_ks=ks, cu_seqlen_ke=ke)
-    diff = validate_tensor_match(logits_ref, logits_tl, tolerance=1e-14, tensor_name="logits", should_raise=False)
-
-    print(f"diff: {diff}")
-
-    from tilelang.profiler import do_bench
-
-    def logits_fn():
-        return mqa_attn_return_logits_interface(q=q_fp8, kv=kv_fp8, kv_scales=kv_scales, weights=weights, cu_seqlen_ks=ks, cu_seqlen_ke=ke)
-
-    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
-        logits_fn()
-
-    print(prof.key_averages().table(sort_by="cuda_time_total", max_name_column_width=50))
-
-    logits_ms = do_bench(logits_fn, warmup=100, rep=100)
-    logits_flops = 2 * cost_ref * H * D
-    logits_tflops = logits_flops / (logits_ms * 1e-3) / 1e12
-    print(f"logits_tflops: {logits_tflops}, logits_ms: {logits_ms}")
-    print(f"cost_ref: {cost_ref}")
-
-
-def run_regression_perf(S=4096, SKV=8192, H=32, HKV=1, D=64, kv_stride=1):
-    torch.manual_seed(0)
-    q = torch.randn(S, H, D, device="cuda", dtype=torch.bfloat16).to(torch.bfloat16)
-    kv = torch.randn(SKV, D, device="cuda", dtype=torch.bfloat16).to(torch.bfloat16)
-    weights = torch.randn(S, H, device="cuda", dtype=torch.float32)
-    ks, ke = generate_random_cu_seqlens(per_cp_seqlen=S, cp_size=4, cp_rank=3, kv_stride=kv_stride, average_q_len=2048)
-
-    q_fp8 = q.to(torch.float8_e4m3fn)
-    kv_fp8, kv_scales = per_custom_dims_cast_to_fp8(kv, (0,), False)
-
-    from tilelang.profiler import do_bench
-
-    def logits_fn():
-        return mqa_attn_return_logits_interface(q=q_fp8, kv=kv_fp8, kv_scales=kv_scales, weights=weights, cu_seqlen_ks=ks, cu_seqlen_ke=ke)
-
-    return do_bench(logits_fn, backend="cupti")
+    o_temp_temp += mask
+    o_temp_temp = o_temp_temp.to(dtype=torch.float16)
+    return o_temp_temp
 
 
 if __name__ == "__main__":
-    test_fp8_lighting_indexer()
+    func = fp8_lighting_indexer(
+        args.b, args.h, args.m, args.n, args.k, args.bs, args.nums_kernel
+    )
+    compiled_kernel = tilelang.compile(func, target="ascend910")
+    torch.manual_seed(0)
+
+    B = 2
+    M = 2048
+    H = 32
+    K = 64
+    N = 4096
+    BLOCK_SIZE_N = 64
+    q = torch.randn((B * M * H, K), dtype=torch.float16)
+    k = torch.randn((B * N, K), dtype=torch.float16)
+    o = torch.zeros((B * M, N), dtype=torch.float16).npu()
+    q_s = torch.randn((M * H, 1), dtype=torch.float16)
+    k_s = torch.randn((1, N), dtype=torch.float16)
+    workspace = torch.zeros((B * M * H, N), dtype=torch.float16).npu()
+
+    mask = (
+        torch.full((M, N), float("-inf")).triu_(1).to(dtype=torch.float16)
+        if M > 1
+        else None
+    )
+    mask = torch.stack([mask for _ in range(B)], dim=0)  # (B, M, N)
+
+    compiled_kernel(
+        q.npu(),
+        k.npu(),
+        o,
+        q_s.npu(),
+        k_s.npu(),
+        workspace,
+        mask.reshape(B * M, N).npu(),
+    )
+    print(o.cpu().reshape(B, M, N))
+
+    o_torch = ref_fp8_index(
+        q.reshape(B, M, H, K),
+        q_s.reshape(M * H),
+        k.reshape(B, N, K),
+        k_s.reshape(N),
+        mask,
+    )
+    print("torch:", o_torch.cpu())
+
+    torch.testing.assert_close(
+        o.cpu().reshape(B, M, N), o_torch, rtol=3e-2, atol=2e-2
+    )  # fp16 cross-impl tolerance: NPU fp32-store-to-fp16 vs torch fp16 matmul accumulation differs at ULP scale

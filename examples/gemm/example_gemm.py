@@ -1,38 +1,47 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2025.
+import os
+import torch
 import tilelang
 import tilelang.language as T
 
 
-@tilelang.jit
-def matmul(A, B, block_M, block_N, block_K, dtype=T.float16, accum_dtype=T.float32):
-    M, N, K = T.const("M, N, K")
+@tilelang.jit(out_idx=[-1], target="ascend910")
+def matmul(M, N, K, block_M, block_N, block_K, dtype="float16", accum_dtype="float32"):
+    @T.prim_func
+    def gemm(
+        A: T.Tensor((M, K), dtype),
+        B: T.Tensor((K, N), dtype),
+        C: T.Tensor((M, N), dtype),
+    ):
+        with T.Kernel(T.ceildiv(N, block_N) * T.ceildiv(M, block_M)) as (
+            cid,
+            _,
+        ):
+            by = cid // T.ceildiv(N, block_N)
+            bx = cid % T.ceildiv(N, block_N)
 
-    A: T.Tensor((M, K), dtype)
-    B: T.Tensor((K, N), dtype)
-    C = T.empty((M, N), dtype)
+            A_shared = T.alloc_shared((block_M, block_K), dtype)
+            B_shared = T.alloc_shared((block_K, block_N), dtype)
+            C_local = T.alloc_fragment((block_M, block_N), accum_dtype)
 
-    with T.Kernel(T.ceildiv(N, block_N), T.ceildiv(M, block_M), threads=128) as (bx, by):
-        A_shared = T.alloc_shared((block_M, block_K), dtype)
-        B_shared = T.alloc_shared((block_K, block_N), dtype)
-        C_local = T.alloc_fragment((block_M, block_N), accum_dtype)
+            for k in T.Pipelined(T.ceildiv(K, block_K), num_stages=2):
+                T.copy(A[by * block_M, k * block_K], A_shared)
+                T.copy(B[k * block_K, bx * block_N], B_shared)
+                T.gemm(A_shared, B_shared, C_local, initC=(k == 0))
 
-        T.clear(C_local)
-        for k in T.Pipelined(T.ceildiv(K, block_K), num_stages=3):
-            T.copy(A[by * block_M, k * block_K], A_shared)
-            T.copy(B[k * block_K, bx * block_N], B_shared)
-            T.gemm(A_shared, B_shared, C_local)
+            T.copy(C_local, C[by * block_M, bx * block_N])
 
-        T.copy(C_local, C[by * block_M, bx * block_N])
-
-    return C
+    return gemm
 
 
 def main():
-    kernel = matmul.compile(M=1024, N=1024, K=1024, block_M=128, block_N=128, block_K=32)
+    # In the future, Developer mode and Expert Mode will transition smoothly without
+    # requiring explicit declarations.
+    os.environ["TILELANG_ASCEND_MODE"] = "Developer"
+    kernel = matmul(1024, 1024, 1024, 128, 128, 32)
 
-    import torch
-
-    a = torch.randn(1024, 1024).cuda().half()
-    b = torch.randn(1024, 1024).cuda().half()
+    a = torch.randn(1024, 1024).npu().half()
+    b = torch.randn(1024, 1024).npu().half()
 
     c = kernel(a, b)
 
@@ -45,22 +54,6 @@ def main():
 
     torch.testing.assert_close(c, ref_c, rtol=1e-2, atol=1e-2)
     print("All check passed.")
-
-    # Get CUDA Source
-    print("CUDA Source:")
-    print(kernel.get_kernel_source())
-
-    # benchmark
-    profiler = kernel.get_profiler()
-    latency = profiler.do_bench(backend="cupti")
-    # latency = profiler.do_bench()
-    print(f"tilelang Latency: {latency}ms")
-
-
-def run_regression_perf():
-    kernel = matmul.compile(M=1024, N=1024, K=1024, block_M=128, block_N=128, block_K=32)
-    profiler = kernel.get_profiler()
-    return profiler.do_bench(backend="cupti")
 
 
 if __name__ == "__main__":
