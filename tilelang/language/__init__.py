@@ -39,7 +39,7 @@ from tilelang.language.copy_op import copy as _CoreCopy  # noqa: E402
 from tilelang.language.allocate import alloc_shared as _core_alloc_shared  # noqa: E402
 
 
-def Kernel(*blocks, is_npu: bool = False, **kwargs):  # noqa: F811
+def Kernel(*blocks, is_npu: bool = True, **kwargs):  # noqa: F811
     if is_npu:
         from tilelang.ascend910.language.kernel import Kernel as _A2Kernel
 
