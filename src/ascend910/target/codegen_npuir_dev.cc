@@ -4040,8 +4040,8 @@ mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const MulNode *op) {
 }
 
 mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const AndNode *op) {
-  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint());
-  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint());
+  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() || op->a.dtype().is_bool());
+  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() || op->b.dtype().is_bool());
   auto lhs = MakeValue(op->a);
   auto rhs = MakeValue(op->b);
   auto mlirVal = BinaryOpCodegen<mlir::arith::AndIOp, std::nullptr_t>(
@@ -4050,8 +4050,8 @@ mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const AndNode *op) {
 }
 
 mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const OrNode *op) {
-  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint());
-  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint());
+  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() || op->a.dtype().is_bool());
+  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() || op->b.dtype().is_bool());
   auto lhs = MakeValue(op->a);
   auto rhs = MakeValue(op->b);
   auto mlirVal = BinaryOpCodegen<mlir::arith::OrIOp, std::nullptr_t>(

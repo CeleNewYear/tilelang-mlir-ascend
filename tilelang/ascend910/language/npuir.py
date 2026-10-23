@@ -1913,3 +1913,11 @@ def sync_block_wait(id):
     )
 
 rs = resource_specialize
+
+
+def atomic_add(dst, src, *args, **kwargs):
+    """Legacy A2 atomic add: ``atomic_add(dst, value, size)``."""
+    size = kwargs.get("size")
+    if args and isinstance(args[0], (list, tuple)):
+        size = args[0]
+    return npuir_atomic_add(dst, src, size)

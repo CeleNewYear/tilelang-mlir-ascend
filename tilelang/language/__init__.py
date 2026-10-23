@@ -137,3 +137,5 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
     npuir_store_fixpipe as store_fixpipe,
     npuir_store_nz2nd as store_nz2nd,
 )
+
+from tilelang.ascend910.language.npuir import atomic_add  # noqa: E402,F811
