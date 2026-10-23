@@ -144,3 +144,8 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F811,F401
     npuir_arange as arange,
     npuir_clamp as vclamp,
 )
+
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
+    npuir_clear as clear,
+    npuir_fill as fill,
+)
