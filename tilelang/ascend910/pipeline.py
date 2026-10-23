@@ -20,8 +20,26 @@ def Ascend910PassPipelineBody(mod: IRModule, target: Target) -> IRModule:
     # so the host/device filter in engine.lower keeps it for codegen.
     for gv in list(mod.functions):
         func = mod[gv]
-        if isinstance(func, tirx.PrimFunc):
-            mod[gv] = func.with_attr("calling_conv", CallingConv.DEVICE_KERNEL_LAUNCH)
+        if not isinstance(func, tirx.PrimFunc):
+            continue
+        # The eager frontend keeps dynamic shape symbols as free vars in buffer
+        # shapes.  A2 codegen expects them as explicit scalar kernel arguments.
+        known = set(func.params)
+        extra = []
+        for buf in func.buffer_map.values():
+            for dim in buf.shape:
+                for var in tirx.analysis.undefined_vars(dim, []):
+                    if var not in known and var not in extra and str(var.dtype).startswith("int"):
+                        extra.append(var)
+        if extra:
+            func = tirx.PrimFunc(
+                list(func.params) + extra,
+                func.body,
+                func.ret_type,
+                func.buffer_map,
+                func.attrs,
+            )
+        mod[gv] = func.with_attr("calling_conv", CallingConv.DEVICE_KERNEL_LAUNCH)
     mod = tirx.transform.BindTarget(target)(mod)
     mod = tilelang.transform.MaterializeKernelLaunch(
         lower_grid_binding=True,
