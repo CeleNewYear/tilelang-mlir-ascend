@@ -1,6 +1,7 @@
 name: Base CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main, update0.1.15]
   release:
