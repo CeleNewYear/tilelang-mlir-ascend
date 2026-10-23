@@ -138,6 +138,21 @@ def compile(
     """
 
     assert isinstance(func, PrimFunc), f"target function must be a PrimFunc but got {type(func)}"
+    from tvm.target import Target as _Target
+
+    _target_obj = _Target(target) if isinstance(target, str) else target
+    if _target_obj is not None and _target_obj.kind.name == "ascend910":
+        return JITKernel(
+            func=func,
+            out_idx=out_idx,
+            execution_backend=execution_backend or "cython",
+            target=_target_obj,
+            target_host=target_host,
+            verbose=bool(verbose),
+            pass_configs=pass_configs,
+            compile_flags=compile_flags,
+        )
+
 
     # Merge function-level attrs from PrimFunc
     func_attrs = func.attrs

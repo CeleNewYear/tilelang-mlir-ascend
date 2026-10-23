@@ -339,6 +339,22 @@ class JITKernel(Generic[_P, _T]):
         target = self.target
         compile_flags = self.compile_flags
 
+        if target.kind.name == "ascend910":
+            from tilelang.ascend910.adapter import Ascend910KernelAdapter
+
+            return create_adapter(
+                Ascend910KernelAdapter,
+                params=artifact.params,
+                result_idx=out_idx,
+                target=target,
+                func_or_mod=tilelang_func,
+                host_mod=artifact.host_mod,
+                device_mod=artifact.device_mod,
+                device_kernel_source=artifact.kernel_source,
+                verbose=self.verbose,
+                pass_configs=pass_configs,
+                compile_flags=compile_flags,
+            )
         if execution_backend == "tvm_ffi":
             # Use TVMFFIKernelAdapter for interoperability with PyTorch via DLPack.
             # But we need to ensure that the runtime is enabled and the runtime module is not None.
