@@ -139,3 +139,8 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
 )
 
 from tilelang.ascend910.language.npuir import atomic_add  # noqa: E402,F811
+
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F811,F401
+    npuir_arange as arange,
+    npuir_clamp as vclamp,
+)

@@ -13,6 +13,7 @@ _ALIASES = {
     "ascend910": "ascend910",
     "ascend-910": "ascend910",
     "a2": "ascend910",
+    "npuir": "ascend910",
     "ascend910b": "ascend910",
 }
 
