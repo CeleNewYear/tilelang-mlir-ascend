@@ -2007,6 +2007,11 @@ template <typename T, typename U>
 mlir::Value CodeGenTileLangNPUIRDEV::BinaryOpCodegen(const PrimExprNode *op,
                                                      U mode, mlir::Value lhs,
                                                      mlir::Value rhs) {
+  // A child expression may be an unsupported call; do not build an MLIR op
+  // with a null operand.
+  if (!lhs || !rhs) {
+    return mlir::Value();
+  }
   // check if same node already created
   // If already created return corresponding MLIR value and do not create
   // duplicated MLIR Op

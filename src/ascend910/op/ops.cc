@@ -20,6 +20,12 @@ using namespace tirx;
                                  Integer(CallEffectKind::kOpaque))
 
 TILELANG_A2_OP(copy);
+TVM_REGISTER_OP("tir.infinity")
+    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kPure));
+TVM_REGISTER_OP("tirx.infinity")
+    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kPure));
+TVM_REGISTER_OP("tirx.nan")
+    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kPure));
 TVM_REGISTER_OP("tir.exp").set_attr<TCallEffectKind>(
     "TCallEffectKind", Integer(CallEffectKind::kOpaque));
 TVM_REGISTER_OP("tir.exp2").set_attr<TCallEffectKind>(

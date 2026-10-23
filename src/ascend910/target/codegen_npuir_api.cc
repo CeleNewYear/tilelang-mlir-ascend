@@ -1022,6 +1022,11 @@ template <typename T, typename U>
 mlir::Value CodeGenTileLangNPUIRAPI::BinaryOpCodegen(const PrimExprNode *op,
                                                      U mode, mlir::Value lhs,
                                                      mlir::Value rhs) {
+  // A child expression may be an unsupported call; do not build an MLIR op
+  // with a null operand.
+  if (!lhs || !rhs) {
+    return mlir::Value();
+  }
   // check if same node already created
   // If already created return corresponding MLIR value and do not create
   // duplicated MLIR Op
@@ -1522,9 +1527,13 @@ void CodeGenTileLangNPUIRAPI::VbrcCodegen(const CallNode *op) {
   tvm::tl::NpuirBrc npuirop(op->args, this->vmap);
   mlir::Value src;
   llvm::ArrayRef<int64_t> inBufferShape;
+  bool is_region_call = false;
+  if (auto *in_call = npuirop.in.as<tvm::tirx::CallNode>()) {
+    is_region_call = in_call->op.same_as(Op::Get("tl.region"));
+  }
   bool isScalar = !npuirop.in.as<tvm::tirx::Buffer>() &&
                   !npuirop.in.as<tvm::tirx::BufferRegion>() &&
-                  !npuirop.in.as<tvm::tirx::CallNode>();
+                  !is_region_call;
   if (isScalar) {
     // Scalar case
     if (npuirop.in->dtype != npuirop.dst->dtype) {
@@ -2723,8 +2732,15 @@ mlir::Value CodeGenTileLangNPUIRAPI::VisitExpr_(const CallNode *op) {
     DebugPrintCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_reshape"))) {
     ReshapeCodegen(op);
+  } else if (op->op.same_as(Op::Get("tl.infinity")) ||
+             op->op.same_as(Op::Get("tirx.infinity")) ||
+             op->op.same_as(Op::Get("tir.infinity"))) {
+    auto ty = DTypetoMLIRType(op->dtype);
+    return builder.create<mlir::arith::ConstantOp>(
+        builder.getUnknownLoc(), ty,
+        builder.getFloatAttr(ty, std::numeric_limits<double>::infinity()));
   } else {
-    VisitExpr_(op);
+    // Unsupported call op: leave the value unset (do not recurse).
   }
   return mlir::Value();
 }
