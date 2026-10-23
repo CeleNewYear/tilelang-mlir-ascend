@@ -7,32 +7,37 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 
 | area | module | verification |
 |---|---|---|
-| target | `src/ascend910/target.cc`, `tilelang/ascend910/target.py` | `Target("ascend910")` is a distinct kind; `A2`/`Ascend910B` normalize through `determine_target`. |
-| compiler | `tilelang/ascend910/bishengir.py` | Exact legacy flag order; compiles golden MLIR; canonicalizer post-pass. |
-| cache | `tilelang/ascend910/cache.py` | Content-addressed by MLIR/pass config/mode/compiler. |
-| launch source | `tilelang/ascend910/runtime.py` | Byte-identical to the `vec_add_1d` launcher golden. |
-| launch compile | `tilelang/ascend910/launcher_compile.py` | Builds the generated launcher `.so` on CPU. |
-| codegen | `src/ascend910/target/` | Expert and developer MLIR emitters, registered as `target.build.tilelang_ascend910{,_dev}`. |
-| frontend | `tilelang/ascend910/language/` | `Kernel`, `copy`, `alloc_ub`, npuir ops and v-prefix aliases; core `tilelang.language` dispatches while an A2 frame is active. |
-| pipeline | `tilelang/ascend910/pipeline.py` | BindTarget, MaterializeKernelLaunch, LowerOpaqueBlock, Simplify; backend manifest registered. |
-| golden data | `golden/a2` | 426 kernels / 70 examples, both modes, with MLIR, argv, launchers. |
+| target | `src/ascend910/target.cc`, `tilelang/ascend910/target.py` | `Target("ascend910")` is a distinct kind. |
+| compiler | `tilelang/ascend910/bishengir.py` | Exact legacy flag order + canonicalizer. |
+| cache | `tilelang/ascend910/cache.py` | Content-addressed MLIR/object cache. |
+| launch source/compile | `tilelang/ascend910/runtime.py`, `launcher_compile.py` | Launcher source is byte-identical to the golden; host `.so` builds. |
+| codegen | `src/ascend910/target/` | Expert + developer MLIR emitters; `target.build.tilelang_ascend910{,_dev}`. |
+| frontend | `tilelang/ascend910/language/` | Kernel/copy/alloc_ub/alloc_L1/L0A/L0B/L0C, npuir ops, v-aliases, gemm, Scope/rs, sync flags/barriers. |
+| pipeline | `tilelang/ascend910/pipeline.py` | BindTarget, MaterializeKernelLaunch, LowerOpaqueBlock, Simplify. |
+| examples | `examples/` | Legacy A2 examples migrated to `target="ascend910"`; `is_npu=True` removed. |
 
-### End-to-end result
+### End-to-end
 
-`tilelang.lower(kernel, target="ascend910")` now works. For the legacy
-`vec_add_1d` example, both expert and developer output match the golden MLIR
-**byte-for-byte** after `bishengir-opt --canonicalize`. The same is true for
-`example_elementwise_add.py`. 14 tests pass.
+- `vec_add_1d`: expert and developer MLIR are byte-identical to golden after
+  canonicalization.
+- `example_elementwise_add.py`: frontend → codegen succeeds.
+- `example_gemv.py`: frontend → codegen succeeds.
+- `example_mixcv.py`: frontend → codegen succeeds.
+- `flash_attn_npuir.py`: frontend builds TIR; codegen currently reports a
+  vector-rank assertion for `vcast`.
+- `vec_add_2d.py`: the standalone pipeline+codegen path works, but the
+  `tilelang.lower` wrapper still segfaults on that TIR; debug is ongoing.
+- 14 unit tests pass.
 
 ## Remaining
 
-1. `T.gemm` / `T.Scope` compatibility for mixcv and flash-attention examples.
-2. A2 JIT adapter: `tilelang.compile(target="ascend910")` currently reaches the
-   Cython adapter and stops because it only knows CUDA targets. The next step is
-   to bind `bishengir.py`, `runtime.py`, `launcher_compile.py` and `cache.py`
-   into an A2 execution backend.
-3. Port the A2 autotune search configuration.
-4. Run the full golden comparison, then re-enable the original CI workflows.
+1. Fix `vec_add_2d` inside `tilelang.lower` and the flash `vcast` rank issue.
+2. A2 JIT adapter: `tilelang.compile(target="ascend910")` reaches the Cython
+   adapter and stops at its CUDA-only target check. Bind `bishengir.py`,
+   `runtime.py`, `launcher_compile.py` and `cache.py` into an A2 execution
+   backend.
+3. Port A2 autotune search configuration.
+4. Run the full golden comparison and re-enable the original CI workflows.
 
 ## Environment
 
