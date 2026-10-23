@@ -1,0 +1,28 @@
+Subject: [tilelang-mlir-ascend] A2 rebase onto tilelang v0.1.15 — status
+
+Hello,
+
+The Ascend 910 (A2) backend has been rebased onto tilelang v0.1.15 on the
+`rebase-v0.1.15` branch:
+
+https://github.com/CeleNewYear/tilelang-mlir-ascend/tree/rebase-v0.1.15
+
+Highlights:
+- Parallel `src/ascend910` + `tilelang/ascend910` implementation, independent
+  of the Ascend 950 backend.
+- Legacy A2 frontend restored through `tilelang.language` (Kernel/copy/alloc,
+  npuir ops, gemm, Scope, sync, reduce).
+- Golden corpus committed; 26/34 migrated examples reach canonicalized MLIR,
+  11 match golden byte-for-byte (vec_add 1D/2D/dynamic, atomic add, exp2/log2,
+  rms norm, fp8 indexer, ...).
+- `tilelang.compile(target="ascend910")` compiles MLIR to `kernel.o` and
+  `libkernel_launcher.so` with a content-addressed cache.
+
+Remaining:
+- Device load/launch runtime bridge (needs NPU host).
+- Mixed Cube/Vector codegen for flash attention and sparse MLA.
+- Autotune profiling and CI runners.
+
+Full details: docs/ascend910/verification.md
+
+Best regards
