@@ -1030,13 +1030,27 @@ mlir::Value CodeGenTileLangNPUIRAPI::BinaryOpCodegen(const PrimExprNode *op,
     return result.second;
   }
   mlir::Value mlirVal;
+  if (lhs.getType() != rhs.getType() &&
+      lhs.getType().isIntOrIndex() && rhs.getType().isIntOrIndex()) {
+    auto to_index = [&](mlir::Value v) {
+      return v.getType().isIndex() ? v : CreateIndexCastOp(v);
+    };
+    lhs = to_index(lhs);
+    rhs = to_index(rhs);
+  }
   if constexpr (std::is_same_v<U, std::nullptr_t>) {
     // create binary arithmetic operations
-    mlirVal = builder.create<T>(builder.getUnknownLoc(), lhs, rhs);
+    if constexpr (std::is_same_v<T, mlir::arith::MulIOp>) {
+      mlirVal = builder.create<T>(builder.getUnknownLoc(), lhs, rhs,
+                                  mlir::arith::IntegerOverflowFlags::none);
+    } else {
+      mlirVal = builder.create<T>(builder.getUnknownLoc(), lhs, rhs);
+    }
   } else {
     // create binary comparison operations
     mlirVal = builder.create<T>(builder.getUnknownLoc(), mode, lhs, rhs);
   }
+
   UpdatePrimExprMap(op, mlirVal);
   return mlirVal;
 }

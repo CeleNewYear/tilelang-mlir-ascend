@@ -21,7 +21,7 @@ def _build():
         C: T.Tensor((N,), "float32"),
         shape: T.int32,
     ):
-        with T.Kernel(1, is_npu=True) as (cid, _):
+        with T.Kernel(1) as (cid, _):
             A_VEC = T.alloc_ub((N,), "float32")
             B_VEC = T.alloc_ub((N,), "float32")
             C_VEC = T.alloc_ub((N,), "float32")

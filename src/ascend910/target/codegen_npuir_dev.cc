@@ -2031,13 +2031,27 @@ mlir::Value CodeGenTileLangNPUIRDEV::BinaryOpCodegen(const PrimExprNode *op,
     }
   }
   mlir::Value mlirVal;
+  if (lhs.getType() != rhs.getType() &&
+      lhs.getType().isIntOrIndex() && rhs.getType().isIntOrIndex()) {
+    auto to_index = [&](mlir::Value v) {
+      return v.getType().isIndex() ? v : CreateIndexCastOp(v);
+    };
+    lhs = to_index(lhs);
+    rhs = to_index(rhs);
+  }
   if constexpr (std::is_same_v<U, std::nullptr_t>) {
     // create binary arithmetic operations
-    mlirVal = builder.create<T>(builder.getUnknownLoc(), lhs, rhs);
+    if constexpr (std::is_same_v<T, mlir::arith::MulIOp>) {
+      mlirVal = builder.create<T>(builder.getUnknownLoc(), lhs, rhs,
+                                  mlir::arith::IntegerOverflowFlags::none);
+    } else {
+      mlirVal = builder.create<T>(builder.getUnknownLoc(), lhs, rhs);
+    }
   } else {
     // create binary comparison operations
     mlirVal = builder.create<T>(builder.getUnknownLoc(), mode, lhs, rhs);
   }
+
   UpdatePrimExprMap(op, mlirVal);
   return mlirVal;
 }
@@ -3782,6 +3796,29 @@ mlir::Value CodeGenTileLangNPUIRDEV::VisitExpr_(const CallNode *op) {
     DebugPrintCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_reshape"))) {
     ReshapeCodegen(op);
+  } else if (op->op.same_as(Op::Get("tirx.bitwise_and"))) {
+    auto lhs = MakeValue(op->args[0]);
+    auto rhs = MakeValue(op->args[1]);
+    return builder.create<mlir::arith::AndIOp>(builder.getUnknownLoc(), lhs, rhs);
+  } else if (op->op.same_as(Op::Get("tirx.bitwise_or"))) {
+    auto lhs = MakeValue(op->args[0]);
+    auto rhs = MakeValue(op->args[1]);
+    return builder.create<mlir::arith::OrIOp>(builder.getUnknownLoc(), lhs, rhs);
+  } else if (op->op.same_as(Op::Get("tirx.bitwise_xor"))) {
+    auto lhs = MakeValue(op->args[0]);
+    auto rhs = MakeValue(op->args[1]);
+    return builder.create<mlir::arith::XOrIOp>(builder.getUnknownLoc(), lhs, rhs);
+  } else if (op->op.same_as(Op::Get("tirx.shift_right"))) {
+    auto lhs = MakeValue(op->args[0]);
+    auto rhs = MakeValue(op->args[1]);
+    if (op->dtype.is_uint()) {
+      return builder.create<mlir::arith::ShRUIOp>(builder.getUnknownLoc(), lhs, rhs);
+    }
+    return builder.create<mlir::arith::ShRSIOp>(builder.getUnknownLoc(), lhs, rhs);
+  } else if (op->op.same_as(Op::Get("tirx.shift_left"))) {
+    auto lhs = MakeValue(op->args[0]);
+    auto rhs = MakeValue(op->args[1]);
+    return builder.create<mlir::arith::ShLIOp>(builder.getUnknownLoc(), lhs, rhs);
   } else if (op->op.same_as(Op::Get("tir.exp"))) {
     return ScalarExpCodegen(op);
   } else if (op->op.same_as(Op::Get("tir.exp2"))) {
