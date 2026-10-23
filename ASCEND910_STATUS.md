@@ -10,11 +10,12 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 | target | `src/ascend910/target.cc`, `tilelang/ascend910/target.py` | `Target("ascend910")` is a distinct kind. |
 | compiler | `tilelang/ascend910/bishengir.py` | Exact legacy flag order + canonicalizer. |
 | cache | `tilelang/ascend910/cache.py` | Content-addressed MLIR/object cache. |
-| launch source/compile | `tilelang/ascend910/runtime.py`, `launcher_compile.py` | Launcher source is byte-identical to golden; host `.so` builds. |
+| launch source/compile | `tilelang/ascend910/runtime.py`, `launcher_compile.py` | Launcher source byte-identical to golden; host `.so` builds. |
 | codegen | `src/ascend910/target/` | Expert + developer MLIR emitters; registered FFI builders. |
-| frontend | `tilelang/ascend910/language/` | Kernel/copy/alloc_ub/alloc_L1/L0A/L0B/L0C, npuir ops, v-aliases, gemm, Scope/rs, sync flags/barriers. |
+| frontend | `tilelang/ascend910/language/` | Kernel/copy/alloc_ub/L1/L0A/L0B/L0C, npuir ops, v-aliases, gemm, Scope/rs, sync flags/barriers. |
 | pipeline | `tilelang/ascend910/pipeline.py` | BindTarget, MaterializeKernelLaunch, LowerOpaqueBlock, Simplify. |
 | lowering | `tilelang/engine/lower.py` | A2 bypasses the CUDA host/device split and calls codegen directly. |
+| JIT | `tilelang/ascend910/adapter.py`, `tilelang/jit` | `tilelang.compile(target="ascend910")` succeeds and exposes the MLIR. |
 | examples | `examples/` | Legacy A2 examples migrated to `target="ascend910"`; `is_npu=True` removed. |
 
 ### End-to-end
@@ -23,20 +24,19 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 - `example_elementwise_add.py`: frontend → codegen succeeds.
 - `example_gemv.py`: frontend → codegen succeeds.
 - `example_mixcv.py`: frontend → codegen succeeds.
-- `vec_add_2d.py`: frontend → codegen succeeds (MLIR is semantically
-  equivalent; dead linear-offset ops still differ from golden).
-- `flash_attn_npuir.py`: frontend builds TIR; codegen reports a vector-rank
-  assertion in `vcast`.
-- 14 unit tests pass.
+- `vec_add_2d.py`: frontend → codegen succeeds (semantically equivalent MLIR;
+  dead linear-offset ops still differ from golden).
+- `flash_attn_npuir.py`: frontend builds TIR; codegen reports a `vcast` rank
+  assertion.
+- 15 unit tests pass, including compile-only JIT.
 
 ## Remaining
 
 1. Remove the dead linear-offset ops in 2-D copies to match the 2-D golden.
 2. Fix the flash `vcast` rank assertion and mixed Cube/Vector scope lowering.
-3. A2 JIT adapter: `tilelang.compile(target="ascend910")` reaches the Cython
-   adapter and stops at its CUDA-only target check. Bind `bishengir.py`,
-   `runtime.py`, `launcher_compile.py` and `cache.py` into an A2 execution
-   backend.
+3. A2 runtime/execution: the compile-only adapter raises on launch. Connect
+   `bishengir.py`, `runtime.py`, `launcher_compile.py` and `cache.py` into a
+   real execution backend.
 4. Port A2 autotune search configuration.
 5. Full golden comparison, then re-enable the original CI workflows.
 
