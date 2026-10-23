@@ -41,3 +41,14 @@ def test_vec_add_tir_emits_hivm(monkeypatch, mode):
     else:
         assert "bufferization.materialize_in_destination" in src
         assert "#hivm.address_space<gm>" not in src
+
+
+def test_vec_add_expert_matches_golden_after_canonicalize(monkeypatch):
+    from tilelang.ascend910.bishengir import canonicalize_mlir
+
+    monkeypatch.setenv("TILELANG_ASCEND_MODE", "expert")
+    mod = from_source((ROOT / "vec_add_1d_clean.tir").read_text())
+    out = ASCEND910_CODEGEN.lower(mod, Target("ascend910"), compile_device=False)
+    got = canonicalize_mlir(out.inspect_source()).strip()
+    golden = (ROOT.parent / "expert" / "elementwise__vec_add_1d" / "000_main.mlir").read_text().strip()
+    assert got == golden

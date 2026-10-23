@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 _ENV_COMPILER = "TILELANG_NPU_COMPILER_PATH"
+_ENV_OPT = "TILELANG_NPU_OPT_PATH"
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,63 @@ def compile_mlir(
         stdout=proc.stdout,
         stderr=proc.stderr,
     )
+
+
+def find_bishengir_opt() -> str:
+    """Locate ``bishengir-opt`` for post-codegen canonicalization."""
+
+    explicit = os.environ.get(_ENV_OPT)
+    if explicit:
+        path = Path(explicit)
+        if path.is_file():
+            return str(path)
+        raise FileNotFoundError(f"{_ENV_OPT}={explicit!r} is not a file")
+
+    for env_name in ("ASCEND_HOME_PATH", "ASCEND_TOOLKIT_HOME"):
+        root = os.environ.get(env_name)
+        if not root:
+            continue
+        for rel in ("tools/bishengir/bin/bishengir-opt", "bin/bishengir-opt"):
+            candidate = Path(root) / rel
+            if candidate.is_file():
+                return str(candidate)
+
+    found = shutil.which("bishengir-opt")
+    if found:
+        return found
+    raise RuntimeError(
+        "Cannot find bishengir-opt. Set TILELANG_NPU_OPT_PATH or put the "
+        "CANN tools/bishengir/bin directory on PATH."
+    )
+
+
+def canonicalize_mlir(mlir: str, *, opt: str | None = None, timeout: int = 300) -> str:
+    """Run the canonicalizer used by the legacy A2 pipeline.
+
+    The canonicalizer is what hoists constants and normalizes commutative
+    operands; golden MLIR is compared after this step.
+    """
+
+    import tempfile
+
+    opt = opt or find_bishengir_opt()
+    with tempfile.TemporaryDirectory(prefix="tilelang-a2-canon-") as tmp:
+        src = Path(tmp) / "kernel.npuir"
+        dst = Path(tmp) / "kernel.canon.mlir"
+        src.write_text(mlir)
+        proc = subprocess.run(
+            [opt, os.fspath(src), "--canonicalize", "-o", os.fspath(dst)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if proc.returncode != 0 or not dst.is_file():
+            raise RuntimeError(
+                "bishengir-opt canonicalize failed.\n"
+                f"Command: {shlex.join([opt, os.fspath(src), '--canonicalize', '-o', os.fspath(dst)])}\n"
+                f"Output:\n{proc.stderr or proc.stdout}"
+            )
+        return dst.read_text()
 
 
 def normalize_compiler_command(command: Sequence[str]) -> list[str]:
