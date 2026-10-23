@@ -122,3 +122,12 @@ from tilelang.ascend910.language import (  # noqa: E402,F401
     alloc_L0C,
     alloc_L1,
 )
+
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
+    npuir_reduce as reduce,
+    reduce_absmax,
+    reduce_abssum,
+    reduce_max,
+    reduce_min,
+    reduce_sum,
+)

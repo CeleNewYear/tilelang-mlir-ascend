@@ -676,10 +676,15 @@ def npuir_brc(src, dst):
         src (Union[tir.Buffer, tir.BufferLoad, tir.BufferRegion, tir.PrimExpr]): Source vector or scalar
         dst (Union[tir.Buffer, tir.BufferLoad]): Destination vector
     """
+    if isinstance(src, (int, float)):
+        src = tir.const(src, dst.dtype)
     src_extent = _get_extent(src)
     dst_extent = _get_extent(dst)
 
     if not isinstance(src, tir.PrimExpr):
+        # A scalar buffer (rank 1) may broadcast into a higher-rank vector.
+        if len(src_extent) < len(dst_extent):
+            src_extent = [1] * (len(dst_extent) - len(src_extent)) + list(src_extent)
         assert len(src_extent) == len(dst_extent), (
             "The input vector and output vector must have same rank."
         )
