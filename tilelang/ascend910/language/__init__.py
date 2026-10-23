@@ -93,6 +93,7 @@ vexp2 = npuir_exp2
 vrelu = npuir_relu
 vsigmoid = npuir_sigmoid
 vln = npuir_ln
+vlog2 = npuir_log2
 vsqrt = npuir_sqrt
 vrsqrt = npuir_rsqrt
 vabs = npuir_abs

@@ -94,7 +94,7 @@ _A2_ALIASES = {
     "vor": "npuir_or", "vand": "npuir_and", "vxor": "npuir_xor",
     "vpow": "npuir_pow", "vshl": "npuir_shl", "vshr": "npuir_shr",
     "vexp": "npuir_exp", "vexp2": "npuir_exp2", "vrelu": "npuir_relu",
-    "vsigmoid": "npuir_sigmoid", "vln": "npuir_ln", "vsqrt": "npuir_sqrt",
+    "vsigmoid": "npuir_sigmoid", "vln": "npuir_ln", "vlog2": "npuir_log2", "vsqrt": "npuir_sqrt",
     "vrsqrt": "npuir_rsqrt", "vabs": "npuir_abs", "vrec": "npuir_rec",
     "vnot": "npuir_not", "vselect": "npuir_select", "vcmp": "npuir_cmp",
     "vdot": "npuir_dot", "vbrc": "npuir_brc", "vcast": "npuir_cast",
