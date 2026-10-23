@@ -7,6 +7,7 @@ lowering/codegen lives in this namespace and must not depend on
 
 from __future__ import annotations
 
+from . import backend  # noqa: F401  (registers the backend manifest)
 from . import cache  # noqa: F401
 from . import runtime  # noqa: F401
 from . import target  # noqa: F401  (registers target normalizer)

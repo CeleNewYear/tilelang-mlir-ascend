@@ -30,3 +30,80 @@ from tilelang.cuda.language import (  # noqa: F401
 )
 
 __tilelang_dialect__ = "cuda"
+# ---- Ascend 910 (A2) compatibility facade -------------------------------
+# Examples use `import tilelang.language as T` and select A2 with
+# `T.Kernel(..., is_npu=True)`; keep the CUDA surface intact and dispatch only
+# while an A2 kernel frame is active.
+from tilelang.cuda.language import Kernel as _CoreKernel  # noqa: E402
+from tilelang.language.copy_op import copy as _CoreCopy  # noqa: E402
+from tilelang.language.allocate import alloc_shared as _core_alloc_shared  # noqa: E402
+
+
+def Kernel(*blocks, is_npu: bool = False, **kwargs):  # noqa: F811
+    if is_npu:
+        from tilelang.ascend910.language.kernel import Kernel as _A2Kernel
+
+        return _A2Kernel(*blocks, is_npu=True, **kwargs)
+    return _CoreKernel(*blocks, **kwargs)
+
+
+def copy(*args, **kwargs):  # noqa: F811
+    from tilelang.ascend910.language.kernel import is_active
+
+    if is_active():
+        from tilelang.ascend910.language.copy import copy as _a2_copy
+
+        return _a2_copy(*args, **kwargs)
+    return _CoreCopy(*args, **kwargs)
+
+
+def alloc_ub(shape, dtype, scope="shared"):
+    return _core_alloc_shared(shape, dtype, scope=scope)
+
+
+_A2_OP_NAMES = [
+    "npuir_abs", "npuir_add", "npuir_and", "npuir_arange", "npuir_atomic_add",
+    "npuir_bitcast", "npuir_brc", "npuir_cast", "npuir_cmp", "npuir_concat",
+    "npuir_cumsum", "npuir_deinterleave", "npuir_div", "npuir_dot", "npuir_exp",
+    "npuir_exp2", "npuir_flip", "npuir_gather", "npuir_interleave", "npuir_ln",
+    "npuir_load_nd2nz", "npuir_max", "npuir_min", "npuir_mul", "npuir_not",
+    "npuir_or", "npuir_pad", "npuir_pow", "npuir_rec", "npuir_reduce",
+    "npuir_relu", "npuir_reshape", "npuir_rsqrt", "npuir_select", "npuir_shl",
+    "npuir_shr", "npuir_sigmoid", "npuir_sort", "npuir_sqrt",
+    "npuir_store_fixpipe", "npuir_store_nz2nd", "npuir_sub", "npuir_transpose",
+    "npuir_vcos", "npuir_verf", "npuir_vsin", "npuir_vtanh", "npuir_xor",
+]
+
+
+def _make_a2_op(name):
+    def _op(*args, **kwargs):
+        from tilelang.ascend910.language import npuir
+
+        return getattr(npuir, name)(*args, **kwargs)
+
+    _op.__name__ = name
+    return _op
+
+
+for _name in _A2_OP_NAMES:
+    globals()[_name] = _make_a2_op(_name)
+
+_A2_ALIASES = {
+    "vadd": "npuir_add", "vsub": "npuir_sub", "vmul": "npuir_mul",
+    "vdiv": "npuir_div", "vmax": "npuir_max", "vmin": "npuir_min",
+    "vor": "npuir_or", "vand": "npuir_and", "vxor": "npuir_xor",
+    "vpow": "npuir_pow", "vshl": "npuir_shl", "vshr": "npuir_shr",
+    "vexp": "npuir_exp", "vexp2": "npuir_exp2", "vrelu": "npuir_relu",
+    "vsigmoid": "npuir_sigmoid", "vln": "npuir_ln", "vsqrt": "npuir_sqrt",
+    "vrsqrt": "npuir_rsqrt", "vabs": "npuir_abs", "vrec": "npuir_rec",
+    "vnot": "npuir_not", "vselect": "npuir_select", "vcmp": "npuir_cmp",
+    "vdot": "npuir_dot", "vbrc": "npuir_brc", "vcast": "npuir_cast",
+    "vreduce": "npuir_reduce", "vcumsum": "npuir_cumsum", "vsort": "npuir_sort",
+    "vtranspose": "npuir_transpose", "vinterleave": "npuir_interleave",
+    "vdeinterleave": "npuir_deinterleave", "varange": "npuir_arange",
+    "vconcat": "npuir_concat", "vpad": "npuir_pad", "vflip": "npuir_flip",
+    "vbitcast": "npuir_bitcast", "vcos": "npuir_vcos", "vsin": "npuir_vsin",
+    "verf": "npuir_verf", "vtanh": "npuir_vtanh",
+}
+for _alias, _target in _A2_ALIASES.items():
+    globals()[_alias] = _make_a2_op(_target)
