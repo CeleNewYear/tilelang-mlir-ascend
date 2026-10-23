@@ -48,6 +48,7 @@ def Ascend910PassPipelineBody(mod: IRModule, target: Target) -> IRModule:
         unsupported_annotations=["cluster_dims"],
         launch_dim_tags=["cthread"],
     )(mod)
+    mod = tilelang.transform.PlanAndUpdateBufferAllocationLocation()(mod)
     mod = tilelang.transform.LowerOpaqueBlock()(mod)
     mod = tilelang.transform.Simplify()(mod)
     return mod
