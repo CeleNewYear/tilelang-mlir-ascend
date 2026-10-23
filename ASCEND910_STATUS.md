@@ -23,10 +23,8 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 `work/run_golden_suite.py` runs every migrated example with a golden module:
 
 - 34 examples with a matching source file
-- 34 emit MLIR, 33 canonicalize; `flash_attn`, sparse-MLA and
-  `ssd_chunk_scan` use the textual `syn_instr_mode` form that the installed
-  `bishengir-opt` cannot re-parse (the golden MANIFEST records the same
-  failure)
+- 34 emit MLIR and 34 canonicalize
+- 11 are byte-identical
 - 11 are byte-identical to golden after canonicalization:
   `vec_add_1d`, `vec_add_2d`, `vec_add_2d_dynamic_shape`,
   `vec_add_2d_multi_buffer`, `atomic_add`, `atomic_add_dev`,

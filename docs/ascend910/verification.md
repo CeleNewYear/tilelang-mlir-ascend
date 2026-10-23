@@ -37,8 +37,7 @@ MLIR with `bishengir-opt --canonicalize`, and compares it to the corpus entry.
 At the current commit:
 
 - 34 corpus examples have a matching migrated source file
-- all 34 emit MLIR, 33 canonicalize (the mixed/textual-sync kernels keep
-  the golden's unparseable `syn_instr_mode` form)
+- all 34 emit MLIR and canonicalize
 - 11 are byte-identical
 
 Byte-identical:

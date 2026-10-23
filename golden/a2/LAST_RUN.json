@@ -1,0 +1,246 @@
+{
+  "examples": 34,
+  "emit_mlir": 34,
+  "canonicalized": 34,
+  "golden_equal": 11,
+  "rows": [
+    {
+      "name": "TileOPs__tileops__kernels__elementwise__lerp_tensor__lerp_tensor_kernel___make_lerp_tensor_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 6697,
+      "new_bytes": 5834
+    },
+    {
+      "name": "TileOPs__tileops__kernels__elementwise__lerp_tensor__lerp_tensor_kernel__perf_opt___make_lerp_tensor_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 6697,
+      "new_bytes": 5834
+    },
+    {
+      "name": "TileOPs__tileops__kernels__elementwise__mish__mish_kernel__mish",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 6330,
+      "new_bytes": 4054
+    },
+    {
+      "name": "TileOPs__tileops__kernels__elementwise__mish__mish_kernel__perf_opt__mish",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 7736,
+      "new_bytes": 6298
+    },
+    {
+      "name": "TileOPs__tileops__kernels__mamba__ssd_chunk_scan__ssd_chunk_scan_kernel___ssd_chunk_scan_fwd_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 23834,
+      "new_bytes": 22608
+    },
+    {
+      "name": "TileOPs__tileops__kernels__mamba__ssd_chunk_scan__ssd_chunk_scan_kernel__perf_opt___ssd_chunk_scan_fwd_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 23834,
+      "new_bytes": 22410
+    },
+    {
+      "name": "TileOPs__tileops__kernels__norm__ada_layer_norm__ada_layer_norm_kernel___ada_layer_norm_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 8782,
+      "new_bytes": 7191
+    },
+    {
+      "name": "TileOPs__tileops__kernels__norm__ada_layer_norm__ada_layer_norm_kernel__perf_opt___ada_layer_norm_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 8565,
+      "new_bytes": 6390
+    },
+    {
+      "name": "TileOPs__tileops__kernels__reduction__argmax__argmax_kernel___argreduce_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 5649,
+      "new_bytes": 3752
+    },
+    {
+      "name": "TileOPs__tileops__kernels__reduction__argmax__argmax_kernel__perf_opt___argreduce_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 5345,
+      "new_bytes": 3668
+    },
+    {
+      "name": "TileOPs__tileops__kernels__reduction__logsumexp___logsumexp_kernel_single___logsumexp_kernel_single",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 4662,
+      "new_bytes": 3991
+    },
+    {
+      "name": "TileOPs__tileops__kernels__reduction__logsumexp___logsumexp_kernel_tiled___logsumexp_kernel_tiled",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 6920,
+      "new_bytes": 5422
+    },
+    {
+      "name": "deepseek_v32__fp8_lighting_indexer",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 14700,
+      "new_bytes": 14700
+    },
+    {
+      "name": "deepseek_v32__sparse_mla_bwd",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 12188,
+      "new_bytes": 14112
+    },
+    {
+      "name": "deepseek_v32__sparse_mla_fwd",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 12346,
+      "new_bytes": 14264
+    },
+    {
+      "name": "deepseek_v32__sparse_mla_fwd_exp",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 27270,
+      "new_bytes": 25922
+    },
+    {
+      "name": "deepseek_v4__example_act_quant_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 5095,
+      "new_bytes": 5347
+    },
+    {
+      "name": "deepseek_v4__example_lighting_indexer_fwd_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 8235,
+      "new_bytes": 6858
+    },
+    {
+      "name": "deepseek_v4__example_sparse_mla_fwd_kernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 14756,
+      "new_bytes": 9792
+    },
+    {
+      "name": "elementwise__atomic_add",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 2032,
+      "new_bytes": 2032
+    },
+    {
+      "name": "elementwise__atomic_add_dev",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 1810,
+      "new_bytes": 1810
+    },
+    {
+      "name": "elementwise__example_elementwise_exp2",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 2989,
+      "new_bytes": 2989
+    },
+    {
+      "name": "elementwise__example_elementwise_log2",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 2988,
+      "new_bytes": 2988
+    },
+    {
+      "name": "elementwise__vec_add_1d",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 3400,
+      "new_bytes": 3400
+    },
+    {
+      "name": "elementwise__vec_add_2d",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 3610,
+      "new_bytes": 3610
+    },
+    {
+      "name": "elementwise__vec_add_2d_dynamic_shape",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 5864,
+      "new_bytes": 5864
+    },
+    {
+      "name": "elementwise__vec_add_2d_multi_buffer",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 9502,
+      "new_bytes": 9502
+    },
+    {
+      "name": "engram__engram_decode",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 19704,
+      "new_bytes": 21323
+    },
+    {
+      "name": "gemm__matmul",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 5309,
+      "new_bytes": 5305
+    },
+    {
+      "name": "gemm__matmul_dynamic_shape",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 7972,
+      "new_bytes": 7968
+    },
+    {
+      "name": "mixcv__mixcv_mixkernel",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 9304,
+      "new_bytes": 9104
+    },
+    {
+      "name": "norm__ada_layer_norm_and_zero",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 7693,
+      "new_bytes": 7693
+    },
+    {
+      "name": "norm__example_rms_norm",
+      "status": "ok",
+      "golden_equal": true,
+      "golden_bytes": 4291,
+      "new_bytes": 4291
+    },
+    {
+      "name": "posembedding__rope_llama31__rope_llama31",
+      "status": "ok",
+      "golden_equal": false,
+      "golden_bytes": 9349,
+      "new_bytes": 6436
+    }
+  ]
+}
