@@ -35,6 +35,10 @@ def gemm(
     size=None,
     **kwargs,
 ):
+    if "a_transpose" in kwargs:
+        transpose_A = bool(kwargs["a_transpose"])
+    if "b_transpose" in kwargs:
+        transpose_B = bool(kwargs["b_transpose"])
     if args:
         if isinstance(args[0], (list, tuple)):
             size = args[0]
