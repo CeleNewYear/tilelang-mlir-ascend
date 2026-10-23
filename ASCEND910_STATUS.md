@@ -23,11 +23,12 @@ parallel `ascend910` namespace, independent of the Ascend 950 backend.
 `work/run_golden_suite.py` runs every migrated example with a golden module:
 
 - 34 examples with a matching source file
-- 26 reach canonicalized MLIR
+- 26 reach canonicalized MLIR (27 emit MLIR; flash expert output hits the
+  known textual-sync parse limitation)
 - 11 are byte-identical to golden after canonicalization:
   `vec_add_1d`, `vec_add_2d`, `vec_add_2d_dynamic_shape`,
   `vec_add_2d_multi_buffer`, `atomic_add`, `atomic_add_dev`,
-  `elementwise_add`, `elementwise_exp2`, `elementwise_log2`,
+  `elementwise_exp2`, `elementwise_log2`,
   `ada_layer_norm_and_zero`, `rms_norm`, `fp8_lighting_indexer`
 - Remaining differences are mostly allocation/attribute ordering and a few
   mixed-kernel/frontend semantics (flash, sparse-MLA, some TileOPs kernels).
@@ -37,7 +38,10 @@ compilation, and 2-D/dynamic golden MLIR.
 
 ## Remaining
 
-1. Mixed Cube/Vector resource-scope splitting for flash/sparse-MLA.
+1. Mixed Cube/Vector codegen: `flash_attn_npuir` now emits expert MLIR; the
+   captured golden uses textual `syn_instr_mode = <...>` that the installed
+   `bishengir-opt` cannot re-parse (the golden MANIFEST records the same
+   failure). Developer mode and sparse-MLA still need work.
 2. A2 device load/launch bridge (`NPUUtils.load_binary`) — requires NPU host.
 3. Autotune profiling on A2.
 4. Remaining golden diffs (allocation order, O2 attribute ordering).
