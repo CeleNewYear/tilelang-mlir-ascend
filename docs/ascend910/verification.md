@@ -37,7 +37,7 @@ MLIR with `bishengir-opt --canonicalize`, and compares it to the corpus entry.
 At the current commit:
 
 - 34 corpus examples have a matching migrated source file
-- 31 reach canonicalized MLIR (all 34 emit MLIR)
+- 33 reach canonicalized MLIR (34 emit MLIR)
 - 11 are byte-identical
 
 Byte-identical:
