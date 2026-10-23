@@ -131,3 +131,9 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
     reduce_min,
     reduce_sum,
 )
+
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
+    npuir_load_nd2nz as load_nd2nz,
+    npuir_store_fixpipe as store_fixpipe,
+    npuir_store_nz2nd as store_nz2nd,
+)

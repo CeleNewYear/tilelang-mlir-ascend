@@ -1812,35 +1812,65 @@ class FrameStack:
         return len(self._stack)
 
 
+from tvm.tirx.script.builder.ir import attr as _attr_frame
+
 _SCOPE_STACK = []
-
-
-class _NoopScope:
-    """Structural scope with the legacy resource name."""
-
-    def __init__(self, name):
-        self.name = str(name)
-
-    def __enter__(self):
-        _SCOPE_STACK.append(self.name)
-        return self
-
-    def __exit__(self, ptype, value, trace):
-        if _SCOPE_STACK and _SCOPE_STACK[-1] == self.name:
-            _SCOPE_STACK.pop()
-        return False
 
 
 def _scope_name():
     return _SCOPE_STACK[-1] if _SCOPE_STACK else "Vector"
 
 
+def _push_scope(name):
+    _SCOPE_STACK.append(str(name))
+
+
+def _pop_scope(name):
+    if _SCOPE_STACK and _SCOPE_STACK[-1] == str(name):
+        _SCOPE_STACK.pop()
+
+
+class _Scope:
+    """AttrStmt resource_scope frame matching the legacy A2 frontend."""
+
+    def __init__(self, name):
+        self.name = str(name)
+        scope_id = 1 if self.name == "Vector" else 0
+        self._frame = _attr_frame(None, "resource_scope", scope_id)
+
+    def __enter__(self):
+        _push_scope(self.name)
+        self._frame.__enter__()
+        return self
+
+    def __exit__(self, ptype, value, trace):
+        _pop_scope(self.name)
+        return self._frame.__exit__(ptype, value, trace)
+
+
+class _ResourceScope:
+    """AttrStmt carrying the legacy pipe/resource name."""
+
+    def __init__(self, resource):
+        self.name = str(resource)
+        self._frame = _attr_frame(None, self.name, 1)
+
+    def __enter__(self):
+        _push_scope(self.name)
+        self._frame.__enter__()
+        return self
+
+    def __exit__(self, ptype, value, trace):
+        _pop_scope(self.name)
+        return self._frame.__exit__(ptype, value, trace)
+
+
 def resource_specialize(resource):
-    return _NoopScope(resource)
+    return _ResourceScope(resource)
 
 
 def Scope(name):
-    return _NoopScope(name)
+    return _Scope(name)
 
 
 def set_flag(other, event_id: int = 0):
