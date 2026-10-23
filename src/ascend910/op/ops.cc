@@ -4,19 +4,21 @@
 /*!
  * \file src/ascend910/op/ops.cc
  * \brief Register the A2 npuir operators.
- *
- * The codegen compares ``CallNode::op`` against these names.  The full
- * tile-operator builder is added with the frontend port; registration is
- * enough for the MLIR emitter and keeps the operator namespace independent
- * from Ascend 950's ``tl.*`` ops.
  */
 
 #include <tvm/ir/op.h>
+#include <tvm/tirx/op_attr_types.h>
 
 namespace tvm {
 namespace tl {
 
-#define TILELANG_A2_OP(Name) TVM_REGISTER_OP("tl." #Name)
+using namespace tirx;
+
+#define TILELANG_A2_OP(Name)                                                   \
+  TVM_REGISTER_OP("tl." #Name)                                                 \
+      .set_attr<TCallEffectKind>("TCallEffectKind",                            \
+                                 Integer(CallEffectKind::kOpaque))
+
 TILELANG_A2_OP(copy);
 TILELANG_A2_OP(npuir_abs);
 TILELANG_A2_OP(npuir_add);
