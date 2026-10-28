@@ -38,11 +38,11 @@
 #include <tvm/tirx/stmt_functor.h>
 #include <tvm/tirx/transform.h>
 
-#include <set>
-#include <unordered_set>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
+#include <unordered_set>
 
 #include "arith/scalable_expression.h"
 #include "tirx/analysis/check_contains.h"
@@ -72,6 +72,18 @@ private:
   // Statements that need to be hoisted before the outermost parallel loop
   // (copy / reshape / brc).
   std::vector<Stmt> hoisted_stmts_;
+
+  // v0.1.15 spells TIR intrinsics as ``tirx.*`` (the ``tir`` namespace was
+  // renamed), while the op tables below are keyed by the legacy ``tir.*``
+  // names.  Normalise before every lookup/comparison so the ported pass keeps
+  // working across both TVM spellings.
+  static std::string CanonicalTirOpName(const std::string &name) {
+    static const std::string kRenamed = "tirx.";
+    if (name.compare(0, kRenamed.size(), kRenamed) == 0) {
+      return "tir." + name.substr(kRenamed.size());
+    }
+    return name;
+  }
 
   // ============================================================
   // Op mapping table
@@ -159,8 +171,8 @@ private:
   }
 
   bool UsesLoopVar(const PrimExpr &expr, const VarNode *loop_var) {
-    return tirx::UsesVar(expr,
-                        [loop_var](const VarNode *v) { return v == loop_var; });
+    return tirx::UsesVar(
+        expr, [loop_var](const VarNode *v) { return v == loop_var; });
   }
 
   bool ContainsAnyLoopVar(const PrimExpr &expr,
@@ -279,9 +291,10 @@ private:
       return true;
     if (auto call = expr.as<CallNode>()) {
       if (auto op = call->op.as<OpNode>()) {
-        return op->name == "tir.exp" || op->name == "tir.fabs" ||
-               op->name == "tir.log" || op->name == "tir.sqrt" ||
-               op->name == "tir.rsqrt" || op->name == "tir.sigmoid";
+        const std::string canon = CanonicalTirOpName(op->name);
+        return canon == "tir.exp" || canon == "tir.fabs" ||
+               canon == "tir.log" || canon == "tir.sqrt" ||
+               canon == "tir.rsqrt" || canon == "tir.sigmoid";
       }
     }
     return false;
@@ -320,7 +333,7 @@ private:
   bool IsTernaryOp(const PrimExpr &expr) {
     if (auto call = expr.as<CallNode>()) {
       if (auto op = call->op.as<OpNode>())
-        return op->name == "tir.if_then_else";
+        return CanonicalTirOpName(op->name) == "tir.if_then_else";
     }
     return false;
   }
@@ -469,7 +482,8 @@ private:
   Stmt BuildNpuirCall(const std::string &op_name, Array<PrimExpr> args) {
     AppendCmpMode(op_name, args);
     return Evaluate(
-        Call(DataType::Void(), Op::Get(TirOps2NpuirOps.at(op_name)), args));
+        Call(DataType::Void(),
+             Op::Get(TirOps2NpuirOps.at(CanonicalTirOpName(op_name))), args));
   }
 
   // Unary: region_in -> out
@@ -665,6 +679,49 @@ private:
     return {brc_buf, output_ref.indices, true};
   }
 
+  // Materialise a loop-invariant scalar into a temporary buffer so that ops
+  // which only accept vector operands (``tl.npuir_select`` and friends) get a
+  // proper region.  ``hivm.hir.vbrc`` itself rejects a rank-0 source, so the
+  // scalar has to be broadcast on the TIR level.
+  std::optional<BufferAccessInfo>
+  EmitScalarBrc(const PrimExpr &scalar, const BufferAccessInfo &output_ref,
+                const std::vector<const VarNode *> &loop_vars,
+                const std::vector<int64_t> &loop_extents,
+                const std::string &op_name) {
+    std::vector<int64_t> aligned_shape =
+        GetAlignedLoopShape(output_ref, loop_vars, loop_extents);
+    if (aligned_shape.empty())
+      return std::nullopt;
+
+    // 1. A rank-N temporary with a single element: ``hivm.hir.vbrc`` rejects a
+    //    rank-0 (scalar) source, so the value is materialised first.
+    std::vector<int64_t> ones_shape(aligned_shape.size(), 1);
+    Buffer scalar_buf = CreateTempBufferWithShape(
+        ToShapeExpr(ones_shape), scalar->dtype, "scalar_buf",
+        output_ref.buffer.scope(), op_name);
+    tmp_buffers.push_back(scalar_buf);
+
+    Array<PrimExpr> zero_ones;
+    for (size_t i = 0; i < ones_shape.size(); ++i)
+      zero_ones.push_back(make_const(DataType::Int(32), 0));
+    hoisted_stmts_.push_back(BufferStore(scalar_buf, scalar, zero_ones));
+    auto zero_ones_offsets =
+        MakeZeroOffsets(static_cast<int>(ones_shape.size()));
+
+    // 2. Broadcast that single element to the aligned loop shape.
+    Buffer brc_buf = CreateTempBufferWithShape(
+        ToShapeExpr(aligned_shape), scalar->dtype, "scalar_brc_buf",
+        output_ref.buffer.scope(), op_name);
+    tmp_buffers.push_back(brc_buf);
+
+    auto brc_offsets = MakeZeroOffsets(static_cast<int>(aligned_shape.size()));
+    hoisted_stmts_.push_back(Evaluate(Call(
+        DataType::Void(), Op::Get("tl.npuir_brc"),
+        Array<PrimExpr>{RegionND(scalar_buf, zero_ones_offsets, 2, ones_shape),
+                        RegionND(brc_buf, brc_offsets, 2, aligned_shape)})));
+    return BufferAccessInfo{brc_buf, output_ref.indices, true};
+  }
+
   std::optional<BufferAccessInfo>
   EmitLoopVarArange(const VarNode *loop_var, const BufferAccessInfo &output_ref,
                     const std::vector<const VarNode *> &loop_vars,
@@ -715,9 +772,20 @@ private:
                  const std::vector<int64_t> &loop_extents, Array<Stmt> *stmts,
                  const std::string &op_name = "") {
 
-    // Keep loop-invariant operands as scalar expressions.
-    if (IsLoopInvariantScalarLike(operand, loop_vars))
+    // Keep loop-invariant operands as scalar expressions, except for the ops
+    // whose codegen has to emit a vector source (``select`` lowers to
+    // ``hivm.hir.vsel``/``vbrc``, which only accept ranked operands).
+    if (IsLoopInvariantScalarLike(operand, loop_vars)) {
+      if (op_name == "tl.npuir_select" || op_name == "tl.npuir_brc") {
+        auto materialized = EmitScalarBrc(operand, output_ref, loop_vars,
+                                          loop_extents, op_name);
+        if (materialized) {
+          tmp_bufs->push_back(*materialized);
+          return materialized;
+        }
+      }
       return std::nullopt;
+    }
 
     // Materialize the loop var into a temporary buffer via tl.npuir_arange.
     if (auto var = operand.as<VarNode>()) {
@@ -754,6 +822,64 @@ private:
             loop_extents, op_name);
         tmp_bufs->push_back(expanded);
         return expanded;
+      }
+      // Rank-down: a buffer with leading static-1 dims maps onto the trailing
+      // output dims.  Reshape it into a view of the output rank, otherwise the
+      // emitted vector op mixes ranks (``hivm`` requires equal ranks).
+      const int out_ndim = static_cast<int>(output_ref.indices.size());
+      if (static_cast<int>(simplified_indices.size()) > out_ndim) {
+        const int drop = static_cast<int>(simplified_indices.size()) - out_ndim;
+        bool leading_ones = true;
+        for (int i = 0; i < drop; ++i) {
+          const auto *dim = load->buffer->shape[i].as<IntImmNode>();
+          if (dim == nullptr || dim->value != 1) {
+            leading_ones = false;
+            break;
+          }
+        }
+        if (leading_ones) {
+          std::vector<int64_t> view_shape;
+          for (int i = drop; i < static_cast<int>(load->buffer->shape.size());
+               ++i) {
+            const auto *dim = load->buffer->shape[i].as<IntImmNode>();
+            if (dim == nullptr) {
+              leading_ones = false;
+              break;
+            }
+            view_shape.push_back(dim->value);
+          }
+          if (leading_ones) {
+            std::vector<int64_t> src_shape;
+            for (const auto &d : load->buffer->shape) {
+              const auto *dim = d.as<IntImmNode>();
+              if (dim == nullptr) {
+                leading_ones = false;
+                break;
+              }
+              src_shape.push_back(dim->value);
+            }
+            if (leading_ones) {
+              Buffer view_buf = CreateTempBufferWithShape(
+                  ToShapeExpr(view_shape), load->buffer->dtype, "collapse_buf",
+                  load->buffer.scope(), op_name);
+              tmp_buffers.push_back(view_buf);
+              auto src_offsets =
+                  MakeZeroOffsets(static_cast<int>(src_shape.size()));
+              auto dst_offsets =
+                  MakeZeroOffsets(static_cast<int>(view_shape.size()));
+              hoisted_stmts_.push_back(Evaluate(
+                  Call(DataType::Void(), Op::Get("tl.npuir_reshape"),
+                       Array<PrimExpr>{
+                           RegionND(load->buffer, src_offsets, 1, src_shape),
+                           RegionND(view_buf, dst_offsets, 2, view_shape)})));
+              Array<PrimExpr> trimmed;
+              for (int i = drop;
+                   i < static_cast<int>(simplified_indices.size()); ++i)
+                trimmed.push_back(simplified_indices[i]);
+              return BufferAccessInfo{view_buf, trimmed, true};
+            }
+          }
+        }
       }
       return BufferAccessInfo{load->buffer, simplified_indices, true};
     }
@@ -884,14 +1010,13 @@ private:
         if (IsScalar(operands[0]) || operands[0].as<VarNode>()) {
           region_a = operands[0];
         } else {
-          // BufferLoad or compound expression: broadcast to tmp buffer.
           const BufferAccessInfo &ref = *resolved_b;
-          auto scalar_buf =
-              CreateTempBuffer(ref, binary_op_name, compute_dtype);
-          tmp_bufs->push_back(scalar_buf);
-          stmts->push_back(BuildNpuirCall(
-              "Broadcast", {operands[0], BuildRegionCall(scalar_buf, 2, 1)}));
-          region_a = BuildRegionCall(scalar_buf, 1, 1);
+          auto materialized = EmitScalarBrc(operands[0], ref, loop_vars,
+                                            loop_extents, binary_op_name);
+          if (!materialized)
+            return false;
+          tmp_bufs->push_back(*materialized);
+          region_a = BuildRegionCall(*materialized, 1, 1);
         }
       }
     }
@@ -900,13 +1025,13 @@ private:
       if (IsScalar(operands[1]) || operands[1].as<VarNode>()) {
         region_b = operands[1];
       } else {
-        // BufferLoad or compound expression: broadcast to tmp buffer.
         const BufferAccessInfo &ref = *resolved_a;
-        auto scalar_buf = CreateTempBuffer(ref, binary_op_name, compute_dtype);
-        tmp_bufs->push_back(scalar_buf);
-        stmts->push_back(BuildNpuirCall(
-            "Broadcast", {operands[1], BuildRegionCall(scalar_buf, 2, 1)}));
-        region_b = BuildRegionCall(scalar_buf, 1, 1);
+        auto materialized = EmitScalarBrc(operands[1], ref, loop_vars,
+                                          loop_extents, binary_op_name);
+        if (!materialized)
+          return false;
+        tmp_bufs->push_back(*materialized);
+        region_b = BuildRegionCall(*materialized, 1, 1);
       }
     }
 
@@ -962,10 +1087,12 @@ private:
       // Case 1: simple scalar (IntImm/FloatImm/VarNode/loop-invariant
       // BufferLoad)
       if (IsLoopInvariantScalarLike(e, loop_vars)) {
-        auto tmp = CreateTempBuffer(output_ref, tmp_op);
-        tmp_bufs->push_back(tmp);
-        stmts->push_back(BuildUnaryStmt("Broadcast", e, tmp));
-        return tmp;
+        auto materialized =
+            EmitScalarBrc(e, output_ref, loop_vars, loop_extents, tmp_op);
+        if (!materialized)
+          return std::nullopt;
+        tmp_bufs->push_back(*materialized);
+        return materialized;
       }
 
       // Case 2: try normal vectorization path
@@ -985,32 +1112,12 @@ private:
         }
       }
       if (!contains_loop_var) {
-        // Create a tmp buffer with the full output shape (e.g. 32x16).
-        auto tmp = CreateTempBuffer(output_ref, tmp_op);
-        tmp_bufs->push_back(tmp);
-
-        // Build a region with all-zero offsets and the full buffer shape,
-        // so the broadcast fills the entire buffer in one shot.
-        const Buffer &buf = tmp.buffer;
-        int ndim = buf->shape.size();
-        Array<PrimExpr> zero_indices;
-        for (int i = 0; i < ndim; i++)
-          zero_indices.push_back(make_const(DataType::Int(32), 0));
-
-        Array<PrimExpr> brc_args = {BufferLoad(buf, zero_indices),
-                                    make_const(DataType::Int(32), 2)};
-        for (const auto &s : buf->shape)
-          brc_args.push_back(s);
-
-        // Hoist the broadcast outside the loop so it executes once and
-        // fills the entire buffer.
-        hoisted_stmts_.push_back(Evaluate(Call(
-            DataType::Void(), Op::Get("tl.npuir_brc"),
-            {e, Call(DataType::Handle(), Op::Get("tl.region"), brc_args)})));
-
-        // Return all-zero indices so that subsequent BuildRegionCall
-        // generates the correct read region.
-        return BufferAccessInfo{buf, zero_indices, true};
+        auto materialized =
+            EmitScalarBrc(e, output_ref, loop_vars, loop_extents, op_name);
+        if (!materialized)
+          return std::nullopt;
+        tmp_bufs->push_back(*materialized);
+        return materialized;
       }
 
       return std::nullopt;
@@ -1061,7 +1168,14 @@ private:
 
     if (IsLoopInvariantScalarLike(expr, loop_vars)) {
       DepthGuard guard(depth);
-      stmts->push_back(BuildUnaryStmt("Broadcast", expr, output_ref));
+      auto materialized = EmitScalarBrc(expr, output_ref, loop_vars,
+                                        loop_extents, "tl.npuir_brc");
+      if (!materialized)
+        return false;
+      tmp_bufs->push_back(*materialized);
+      stmts->push_back(BuildNpuirCall(
+          "Copy", Array<PrimExpr>{BuildRegionCall(*materialized, 1, 1),
+                                  BuildRegionCall(output_ref, 2, 1)}));
       guard.commit();
       return true;
     }
@@ -1139,7 +1253,7 @@ private:
         int d = -1;
         for (size_t i = 0; i < op->indices.size(); ++i) {
           if (tirx::UsesVar(op->indices[i],
-                           [inner](const VarNode *v) { return v == inner; })) {
+                            [inner](const VarNode *v) { return v == inner; })) {
             if (d >= 0) {
               d = -2;
               break;
@@ -1236,7 +1350,7 @@ private:
       return GetRef<Stmt>(op);
 
     return SBlock(op->iter_vars, op->reads, op->writes, op->name_hint, new_body,
-                 op->init, allocs);
+                  op->init, allocs);
   }
 
   Stmt VisitStmt_(const ForNode *op) final {
@@ -1301,7 +1415,8 @@ private:
   TryGetConstIntValue(const tvm::PrimExpr &expr,
                       tvm::arith::Analyzer *analyzer = nullptr) {
     // Method 1: Direct check for IntImmNode
-    if (const tvm::tirx::IntImmNode *int_imm = expr.as<tvm::tirx::IntImmNode>()) {
+    if (const tvm::tirx::IntImmNode *int_imm =
+            expr.as<tvm::tirx::IntImmNode>()) {
       return int_imm->value;
     }
 

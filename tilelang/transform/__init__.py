@@ -20,6 +20,16 @@ def NpuLoopVectorize():
     return _ffi_api.NpuLoopVectorize()  # type: ignore
 
 
+def LegalizeNpuirBF16():
+    """Rewrite bf16 elementwise ``tl.npuir_*`` ops as fp32 compute + casts.
+
+    Ascend 910 only: the HIVM verifier rejects bf16 operands on the
+    elementwise vector ops, so the legacy backend lowered them through an
+    fp32 temporary.
+    """
+    return _ffi_api.LegalizeNpuirBF16()  # type: ignore
+
+
 def RewriteFDivToMul():
     """Turn ``x / const`` into ``x * (1 / const)`` for exact float reciprocals.
 

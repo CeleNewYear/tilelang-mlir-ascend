@@ -20,10 +20,10 @@
 #include <sstream>
 #include <string>
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/module.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/ffi/reflection/registry.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tirx/analysis.h>
 #include <tvm/tirx/buffer.h>
@@ -127,7 +127,6 @@ static mlir::Value ExpandLeadingOnes(mlir::OpBuilder &builder, mlir::Value v,
       .getResult();
 }
 
-
 constexpr uint8_t FLAG_ID_BITS = 64;
 
 static std::map<NPU_CORETYPE, std::string> NPU_CORETYPE_STR{
@@ -190,7 +189,7 @@ static std::map<tl::SyncBlockMode, mlir::hivm::SyncBlockInstrMode>
          mlir::hivm::SyncBlockInstrMode::INTER_SUBBLOCK_SYNCHRONIZATION},
         {tl::SyncBlockMode::INTRA_BLOCK,
          mlir::hivm::SyncBlockInstrMode::INTRA_BLOCK_SYNCHRONIZATION},
-    };
+};
 
 static llvm::SmallVector<int64_t>
 getBroadcastDim(const Array<PrimExpr> &buffer_shape0,
@@ -283,7 +282,7 @@ static std::map<std::string, mlir::hivm::DeinterleaveMode>
         {"CHANNEL_0", mlir::hivm::DeinterleaveMode::CHANNEL_0},
         {"CHANNEL_1", mlir::hivm::DeinterleaveMode::CHANNEL_1},
         {"ALL_CHANNELS", mlir::hivm::DeinterleaveMode::ALL_CHANNELS},
-    };
+};
 
 namespace {
 /// Infer function core type: aic, aiv, mix
@@ -374,8 +373,9 @@ CodeGenTileLangAscend910Dev::GetStrideFromShapeAPI(Array<tvm::PrimExpr> shape) {
   return strides;
 }
 
-mlir::Value CodeGenTileLangAscend910Dev::ScalarConvertType(const PrimExpr &imm,
-                                                       DataType targetDtype) {
+mlir::Value
+CodeGenTileLangAscend910Dev::ScalarConvertType(const PrimExpr &imm,
+                                               DataType targetDtype) {
   auto castNode = std::make_unique<tirx::Cast>(targetDtype, imm);
   return MakeValue(*castNode);
 }
@@ -398,8 +398,22 @@ std::string CodeGenTileLangAscend910Dev::Finish() {
   module->print(os);
 
   if (failed(mlir::verify(*module))) {
+    // Persist the rejected module: the LOG(FATAL) message is truncated in the
+    // logs, while the full text is what the diff against the legacy emitter
+    // needs.
+    std::string dump_path = "/tmp/tilelang_a910_bad_mlir.mlir";
+    if (const char *cache_dir = std::getenv("TILELANG_CACHE_DIR")) {
+      dump_path = std::string(cache_dir) + "/a910_bad_mlir.mlir";
+    }
+    std::error_code ec;
+    llvm::raw_fd_ostream dump(dump_path, ec);
+    if (!ec) {
+      dump << mlirCode;
+      dump.close();
+    }
     LOG(FATAL) << "CodeGenTileLangAscend910Dev: Generated MLIR module failed "
-                  "verification: \n"
+                  "verification (full module written to "
+               << dump_path << "): \n"
                << mlirCode;
   }
 
@@ -673,7 +687,8 @@ void CodeGenTileLangAscend910Dev::CollectVarsUsedInBodyButDefinedOutside(
   }
 }
 
-mlir::Type CodeGenTileLangAscend910Dev::DTypetoMLIRType(DataType t) { // NOLINT(*)
+mlir::Type
+CodeGenTileLangAscend910Dev::DTypetoMLIRType(DataType t) { // NOLINT(*)
   int lanes = t.lanes();
   if (t.is_handle()) {
     // ICHECK(t.is_scalar()) << "do not yet support vector types";
@@ -972,8 +987,9 @@ mlir::Value CodeGenTileLangAscend910Dev::GenExtractSliceFromRegion(
   return GenExtractSliceFromRegion(regionop.GetBuffer(), regionop.GetRanges());
 }
 
-mlir::Value CodeGenTileLangAscend910Dev::GenSubviewFromRegion(Buffer buffer_data,
-                                                          Array<Range> range) {
+mlir::Value
+CodeGenTileLangAscend910Dev::GenSubviewFromRegion(Buffer buffer_data,
+                                                  Array<Range> range) {
   /*
   range stores region details
     extent stores the shape or size of region
@@ -1022,7 +1038,7 @@ mlir::Value CodeGenTileLangAscend910Dev::GenSubviewFromRegion(Buffer buffer_data
 
 mlir::Value
 CodeGenTileLangAscend910Dev::GenExtractSliceFromRegion(Buffer buffer_data,
-                                                   Array<Range> range) {
+                                                       Array<Range> range) {
   Array<PrimExpr> region_shape;
   Array<PrimExpr> region_indices;
   for (Range r : range) {
@@ -1077,8 +1093,9 @@ CodeGenTileLangAscend910Dev::CheckMLIRValueMap(mlir::Value val) {
   return std::pair(false, mlir::Value());
 }
 
-inline void CodeGenTileLangAscend910Dev::UpdateMLIRValueMap(const mlir::Value key,
-                                                        mlir::Value val) {
+inline void
+CodeGenTileLangAscend910Dev::UpdateMLIRValueMap(const mlir::Value key,
+                                                mlir::Value val) {
   mlir::Block *curr_block = builder.getInsertionBlock();
   this->mlir_value_map[{key, curr_block}] = val;
 }
@@ -1086,22 +1103,25 @@ inline void CodeGenTileLangAscend910Dev::UpdateMLIRValueMap(const mlir::Value ke
 inline std::pair<bool, mlir::Value>
 CodeGenTileLangAscend910Dev::CheckPrimExprMap(const PrimExprNode *op) {
   mlir::Block *curr_block = builder.getInsertionBlock();
-  auto it = this->prim_expr_map.find({tvm::ffi::GetRef<PrimExpr>(op), curr_block});
+  auto it =
+      this->prim_expr_map.find({tvm::ffi::GetRef<PrimExpr>(op), curr_block});
   if (it != this->prim_expr_map.end()) {
     return std::pair(true, it->second);
   }
   return std::pair(false, mlir::Value());
 }
 
-inline void CodeGenTileLangAscend910Dev::UpdatePrimExprMap(const PrimExprNode *key,
-                                                       mlir::Value val) {
+inline void
+CodeGenTileLangAscend910Dev::UpdatePrimExprMap(const PrimExprNode *key,
+                                               mlir::Value val) {
   mlir::Block *curr_block = builder.getInsertionBlock();
   this->prim_expr_map[{tvm::ffi::GetRef<PrimExpr>(key), curr_block}] = val;
 }
 
 // Type casting for mismatched element types
-mlir::Value CodeGenTileLangAscend910Dev::CreateCastIfTypeMismatch(mlir::Value src,
-                                                              mlir::Value dst) {
+mlir::Value
+CodeGenTileLangAscend910Dev::CreateCastIfTypeMismatch(mlir::Value src,
+                                                      mlir::Value dst) {
   // src is always a tensor, dst may be a tensor or a memref, the return value
   // is always a tensor
 
@@ -1214,10 +1234,9 @@ mlir::Value CodeGenTileLangAscend910Dev::InsertSlice(
 }
 
 // Helper to handle slice insertion with optional type casting
-mlir::Value CodeGenTileLangAscend910Dev::InsertSliceWithCast(mlir::Value src_slice,
-                                                         mlir::Value dst,
-                                                         const SliceRange &dstR,
-                                                         mlir::Location loc) {
+mlir::Value CodeGenTileLangAscend910Dev::InsertSliceWithCast(
+    mlir::Value src_slice, mlir::Value dst, const SliceRange &dstR,
+    mlir::Location loc) {
   auto srcElemTy = mlir::getElementTypeOrSelf(src_slice.getType());
   auto dstElemTy = mlir::getElementTypeOrSelf(dst.getType());
 
@@ -1743,7 +1762,7 @@ mlir::Value CodeGenTileLangAscend910Dev::CreateSameRankDynamicSubview(
 llvm::SmallVector<int64_t>
 CodeGenTileLangAscend910Dev::ComputeUBAllocShapeFromDstRange(
     mlir::RankedTensorType dst_tensor_type_ori,
-    llvm::ArrayRef<mlir::OpFoldResult> dstR_sizes) {
+    llvm::ArrayRef<mlir::OpFoldResult> dstR_sizes, bool keep_dynamic) {
   int64_t rank = dst_tensor_type_ori.getRank();
   ICHECK((int64_t)dstR_sizes.size() == rank);
 
@@ -1759,8 +1778,17 @@ CodeGenTileLangAscend910Dev::ComputeUBAllocShapeFromDstRange(
 
   llvm::SmallVector<int64_t> ub_alloc_shape;
   ub_alloc_shape.reserve(rank);
-  // UB alloc should be compact: drop ALL static-1 dims.
-  for (int64_t d : full_shape) {
+  // UB alloc should be compact: drop ALL static-1 dims.  When ``keep_dynamic``
+  // is set, dims whose region extent is only known at runtime keep their rank:
+  // they cannot be collapsed away on the source side.
+  for (int64_t i = 0; i < rank; ++i) {
+    int64_t d = full_shape[i];
+    if (keep_dynamic && !dstR_sizes[i].dyn_cast<mlir::Attribute>()) {
+      if (d <= 0 || mlir::ShapedType::isDynamic(d))
+        d = 1;
+      ub_alloc_shape.push_back(d);
+      continue;
+    }
     if (d == 1)
       continue;
     ub_alloc_shape.push_back(d);
@@ -1781,6 +1809,15 @@ void CodeGenTileLangAscend910Dev::EmitCopyMemrefToTensor(
       ComputeUBAllocShapeFromDstRange(dst_tensor_type_ori, dstR.sizes);
   CollapsedDims srcC = CollapseStaticOneDims(
       srcR.sizes, static_cast<int64_t>(ub_alloc_shape.size()));
+  if ((int64_t)srcC.projected.size() > (int64_t)ub_alloc_shape.size()) {
+    // A dynamic region extent cannot be collapsed away, so the compacted alloc
+    // would have a lower rank than the copy source.  Recompute it keeping those
+    // dims so both views share one rank.
+    ub_alloc_shape = ComputeUBAllocShapeFromDstRange(
+        dst_tensor_type_ori, dstR.sizes, /*keep_dynamic=*/true);
+    srcC = CollapseStaticOneDims(srcR.sizes,
+                                 static_cast<int64_t>(ub_alloc_shape.size()));
+  }
   llvm::ArrayRef<mlir::OpFoldResult> copy_sizes = srcC.sizes;
   llvm::ArrayRef<int64_t> copy_projected = srcC.projected;
 
@@ -2004,7 +2041,6 @@ void CodeGenTileLangAscend910Dev::AscendCopyCodegen(const CallNode *op) {
   mlir::Value src = GetVarValue(npuirop.src);
   mlir::Value dst = GetVarValue(npuirop.dst);
 
-
   SliceRange srcR = MakeSliceRange(npuirop.src_range);
   SliceRange dstR = MakeSliceRange(npuirop.dst_range);
 
@@ -2044,9 +2080,9 @@ void CodeGenTileLangAscend910Dev::AscendCopyCodegen(const CallNode *op) {
   rhs contains right value
 */
 template <typename T, typename U>
-mlir::Value CodeGenTileLangAscend910Dev::BinaryOpCodegen(const PrimExprNode *op,
-                                                     U mode, mlir::Value lhs,
-                                                     mlir::Value rhs) {
+mlir::Value
+CodeGenTileLangAscend910Dev::BinaryOpCodegen(const PrimExprNode *op, U mode,
+                                             mlir::Value lhs, mlir::Value rhs) {
   // A child expression may be an unsupported call; do not build an MLIR op
   // with a null operand.
   if (!lhs || !rhs) {
@@ -2076,8 +2112,8 @@ mlir::Value CodeGenTileLangAscend910Dev::BinaryOpCodegen(const PrimExprNode *op,
     }
   }
   mlir::Value mlirVal;
-  if (lhs.getType() != rhs.getType() &&
-      lhs.getType().isIntOrIndex() && rhs.getType().isIntOrIndex()) {
+  if (lhs.getType() != rhs.getType() && lhs.getType().isIntOrIndex() &&
+      rhs.getType().isIntOrIndex()) {
     auto to_index = [&](mlir::Value v) {
       return v.getType().isIndex() ? v : CreateIndexCastOp(v);
     };
@@ -2165,8 +2201,8 @@ void CodeGenTileLangAscend910Dev::BarrierCodegen(const CallNode *op) {
 }
 
 mlir::Value CodeGenTileLangAscend910Dev::NeedGenInsertSlice(Buffer buffer_data,
-                                                        Array<Range> range,
-                                                        mlir::Value src) {
+                                                            Array<Range> range,
+                                                            mlir::Value src) {
 
   Array<PrimExpr> region_shape, region_indices;
   for (Range r : range) {
@@ -2213,7 +2249,8 @@ mlir::Value CodeGenTileLangAscend910Dev::NeedGenInsertSlice(Buffer buffer_data,
 // Convert TVM Range to MLIR OpFoldResult arrays
 std::tuple<SmallVector<mlir::OpFoldResult>, SmallVector<mlir::OpFoldResult>,
            SmallVector<mlir::OpFoldResult>>
-CodeGenTileLangAscend910Dev::CreateOpFoldResultArray(const Array<Range> &range) {
+CodeGenTileLangAscend910Dev::CreateOpFoldResultArray(
+    const Array<Range> &range) {
   // TODO: support dynamic shape
   SmallVector<mlir::OpFoldResult> offsets;
   SmallVector<mlir::OpFoldResult> sizes;
@@ -2328,8 +2365,7 @@ void CodeGenTileLangAscend910Dev::VbrcCodegen(const CallNode *op) {
     is_region_call = in_call->op.same_as(Op::Get("tl.region"));
   }
   bool isScalar = !npuirop.in.as<tvm::tirx::Buffer>() &&
-                  !npuirop.in.as<tvm::tirx::BufferRegion>() &&
-                  !is_region_call;
+                  !npuirop.in.as<tvm::tirx::BufferRegion>() && !is_region_call;
   if (isScalar) {
     // Scalar case
     if (npuirop.in->dtype != npuirop.dst->dtype) {
@@ -2444,7 +2480,8 @@ void CodeGenTileLangAscend910Dev::VsortCodegen(const CallNode *op) {
   SetVarValue(npuirop.dst_index, newSortOp->getResult(1));
 }
 
-void CodeGenTileLangAscend910Dev::VsigmoidCodegen(const tvm::tirx::CallNode *op) {
+void CodeGenTileLangAscend910Dev::VsigmoidCodegen(
+    const tvm::tirx::CallNode *op) {
   tvm::tl::NpuirSigmoid npuirop(op->args, this->vmap);
   Value src = GetVarValue(npuirop.src);
   Value dst = GetVarValue(npuirop.dst);
@@ -2941,9 +2978,13 @@ void CodeGenTileLangAscend910Dev::CreateHIVMBinaryVectorOp(const CallNode *op) {
     };
     const int rank0 = rank_of(src0);
     const int rank1 = rank_of(src1);
-    // the result tensor participates in the "same rank" requirement as well
-    const int rank = std::max({rank0, rank1,
-                               static_cast<int>(dst_range.size())});
+    // The destination region rank must NOT participate: the `outs`
+    // initializer (insertBase) keeps the destination rank while the hivm op
+    // is created with insertBase's type.  Raising only the inputs to the
+    // destination rank breaks the equal-rank rule that `hivm.hir.v*` verifies.
+    // Broadcasting into the destination slice is restored afterwards by
+    // ReshapeCastAndInsertSlice, matching the legacy emitter.
+    const int rank = std::max(rank0, rank1);
     auto pad = [](Array<PrimExpr> &shape, int extra) {
       Array<PrimExpr> padded;
       for (int i = 0; i < extra; ++i) {
@@ -2999,10 +3040,51 @@ void CodeGenTileLangAscend910Dev::CreateHIVMBinaryVectorOp(const CallNode *op) {
     newOpValue = newOp->getResult(0);
   }
 
+  // When the operands were resolved through a loop-carried tensor the op is
+  // emitted at *buffer* width even though the TIR region covers a single
+  // element.  In that case the result updates the whole buffer; inserting it
+  // into the one-element slice would need an invalid reshape (256 -> 1).
+  bool widen_to_buffer = false;
+  if (needInsertSlice) {
+    int64_t region_elems = 1;
+    for (const auto &r : dst_range) {
+      const auto *imm = r.get()->extent.as<IntImmNode>();
+      if (imm == nullptr) {
+        region_elems = -1;
+        break;
+      }
+      region_elems *= imm->value;
+    }
+    int64_t buffer_elems = 1;
+    for (const auto &d : region_dst_tmp.GetBuffer()->shape) {
+      const auto *imm = d.as<IntImmNode>();
+      if (imm == nullptr) {
+        buffer_elems = -1;
+        break;
+      }
+      buffer_elems *= imm->value;
+    }
+    int64_t result_elems = 1;
+    if (auto res_ty = newOpValue.getType().dyn_cast<mlir::RankedTensorType>()) {
+      for (int64_t d : res_ty.getShape()) {
+        if (mlir::ShapedType::isDynamic(d)) {
+          result_elems = -1;
+          break;
+        }
+        result_elems *= d;
+      }
+    } else {
+      result_elems = -1;
+    }
+    widen_to_buffer =
+        region_elems == 1 && result_elems > 1 && result_elems == buffer_elems;
+  }
+
   mlir::Value result =
-      needInsertSlice ? ReshapeCastAndInsertSlice(
-                            newOpValue, GetVarValue(region_node_dst), dst_range)
-                      : newOpValue;
+      (needInsertSlice && !widen_to_buffer)
+          ? ReshapeCastAndInsertSlice(newOpValue, GetVarValue(region_node_dst),
+                                      dst_range)
+          : newOpValue;
 
   SetVarValue(region_node_dst, result);
 }
@@ -3779,6 +3861,21 @@ mlir::Value CodeGenTileLangAscend910Dev::ScalarLog2Codegen(const CallNode *op) {
 }
 
 mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const CallNode *op) {
+  // v0.1.15 spells TIR intrinsics as ``tirx.*``; accept both spellings here
+  // so scalar fallbacks (exp/log/...) do not silently drop the store.
+  auto is_named_op = [&](std::initializer_list<const char *> names) -> bool {
+    const auto *as_op = op->op.as<OpNode>();
+    if (!as_op) {
+      return false;
+    }
+    std::string name = as_op->name;
+    for (const char *candidate : names) {
+      if (name == candidate) {
+        return true;
+      }
+    }
+    return false;
+  };
   if (op->op.same_as(Op::Get("tl.npuir_pipe_barrier"))) {
     BarrierCodegen(op);
   } else if (op->op.same_as(builtin::call_extern())) {
@@ -3862,7 +3959,11 @@ mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const CallNode *op) {
     VsigmoidCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_atomic_add"))) {
     VAtomicAddCodegen(op);
-  } else if (op->op.same_as(Op::Get("tl.npuir_cumsum"))) {
+  } else if (op->op.same_as(Op::Get("tl.npuir_cumsum")) ||
+             (op->op.as<OpNode>() &&
+              op->op.as<OpNode>()->name == "tl.cumsum") ||
+             (op->op.as<OpNode>() &&
+              op->op.as<OpNode>()->name == "tl.tileop.cumsum")) {
     VcumsumCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_sort"))) {
     VsortCodegen(op);
@@ -3905,33 +4006,39 @@ mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const CallNode *op) {
   } else if (op->op.same_as(Op::Get("tirx.bitwise_and"))) {
     auto lhs = MakeValue(op->args[0]);
     auto rhs = MakeValue(op->args[1]);
-    return builder.create<mlir::arith::AndIOp>(builder.getUnknownLoc(), lhs, rhs);
+    return builder.create<mlir::arith::AndIOp>(builder.getUnknownLoc(), lhs,
+                                               rhs);
   } else if (op->op.same_as(Op::Get("tirx.bitwise_or"))) {
     auto lhs = MakeValue(op->args[0]);
     auto rhs = MakeValue(op->args[1]);
-    return builder.create<mlir::arith::OrIOp>(builder.getUnknownLoc(), lhs, rhs);
+    return builder.create<mlir::arith::OrIOp>(builder.getUnknownLoc(), lhs,
+                                              rhs);
   } else if (op->op.same_as(Op::Get("tirx.bitwise_xor"))) {
     auto lhs = MakeValue(op->args[0]);
     auto rhs = MakeValue(op->args[1]);
-    return builder.create<mlir::arith::XOrIOp>(builder.getUnknownLoc(), lhs, rhs);
+    return builder.create<mlir::arith::XOrIOp>(builder.getUnknownLoc(), lhs,
+                                               rhs);
   } else if (op->op.same_as(Op::Get("tirx.shift_right"))) {
     auto lhs = MakeValue(op->args[0]);
     auto rhs = MakeValue(op->args[1]);
     if (op->dtype.is_uint()) {
-      return builder.create<mlir::arith::ShRUIOp>(builder.getUnknownLoc(), lhs, rhs);
+      return builder.create<mlir::arith::ShRUIOp>(builder.getUnknownLoc(), lhs,
+                                                  rhs);
     }
-    return builder.create<mlir::arith::ShRSIOp>(builder.getUnknownLoc(), lhs, rhs);
+    return builder.create<mlir::arith::ShRSIOp>(builder.getUnknownLoc(), lhs,
+                                                rhs);
   } else if (op->op.same_as(Op::Get("tirx.shift_left"))) {
     auto lhs = MakeValue(op->args[0]);
     auto rhs = MakeValue(op->args[1]);
-    return builder.create<mlir::arith::ShLIOp>(builder.getUnknownLoc(), lhs, rhs);
-  } else if (op->op.same_as(Op::Get("tir.exp"))) {
+    return builder.create<mlir::arith::ShLIOp>(builder.getUnknownLoc(), lhs,
+                                               rhs);
+  } else if (is_named_op({"tir.exp", "tirx.exp"})) {
     return ScalarExpCodegen(op);
-  } else if (op->op.same_as(Op::Get("tir.exp2"))) {
+  } else if (is_named_op({"tir.exp2", "tirx.exp2"})) {
     return ScalarExp2Codegen(op);
-  } else if (op->op.same_as(Op::Get("tir.log"))) {
+  } else if (is_named_op({"tir.log", "tirx.log"})) {
     return ScalarLogCodegen(op);
-  } else if (op->op.same_as(Op::Get("tir.log2"))) {
+  } else if (is_named_op({"tir.log2", "tirx.log2"})) {
     return ScalarLog2Codegen(op);
   } else if (op->op.as<OpNode>() &&
              (op->op.as<OpNode>()->name == "tirx.if_then_else" ||
@@ -3947,7 +4054,6 @@ mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const CallNode *op) {
   return mlir::Value();
 }
 
-
 void CodeGenTileLangAscend910Dev::VisitStmt_(const BindNode *op) {
   const VarNode *v = op->var.get();
   ICHECK(GetVarValue(v) == mlir::Value{});
@@ -3962,9 +4068,8 @@ void CodeGenTileLangAscend910Dev::VisitStmt_(const AttrStmtNode *op) {
     IterVar iv = Downcast<IterVar>(op->node);
     if ((iv->thread_tag == "blockIdx.x" || iv->thread_tag == "blockIdx.y" ||
          iv->thread_tag == "blockIdx.z") &&
-        !tirx::UsesVar(op->body, [&](const VarNode *v) {
-          return v == iv->var.get();
-        })) {
+        !tirx::UsesVar(op->body,
+                       [&](const VarNode *v) { return v == iv->var.get(); })) {
       VisitStmt(op->body);
       return;
     }
@@ -4047,7 +4152,6 @@ void CodeGenTileLangAscend910Dev::VisitStmt_(const AllocBufferNode *op) {
     ICHECK(GetVarValue(op->buffer->data.get()) == mlir::Value{});
     SetVarValue(op->buffer->data.get(), tensorEmptyOp.getResult());
   }
-
 }
 
 mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const MinNode *op) {
@@ -4157,8 +4261,10 @@ mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const MulNode *op) {
 }
 
 mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const AndNode *op) {
-  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() || op->a.dtype().is_bool());
-  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() || op->b.dtype().is_bool());
+  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() ||
+        op->a.dtype().is_bool());
+  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() ||
+        op->b.dtype().is_bool());
   auto lhs = MakeValue(op->a);
   auto rhs = MakeValue(op->b);
   auto mlirVal = BinaryOpCodegen<mlir::arith::AndIOp, std::nullptr_t>(
@@ -4167,8 +4273,10 @@ mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const AndNode *op) {
 }
 
 mlir::Value CodeGenTileLangAscend910Dev::VisitExpr_(const OrNode *op) {
-  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() || op->a.dtype().is_bool());
-  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() || op->b.dtype().is_bool());
+  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() ||
+        op->a.dtype().is_bool());
+  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() ||
+        op->b.dtype().is_bool());
   auto lhs = MakeValue(op->a);
   auto rhs = MakeValue(op->b);
   auto mlirVal = BinaryOpCodegen<mlir::arith::OrIOp, std::nullptr_t>(
@@ -4198,7 +4306,7 @@ String CodeGenTileLangAscend910Dev::GetCurrentFunctionName() {
 }
 
 void CodeGenTileLangAscend910Dev::AddFunctionForCoreType(const GlobalVar &gvar,
-                                                     const PrimFunc &f) {
+                                                         const PrimFunc &f) {
   // clear previous generated state.
   this->InitFuncState();
 
@@ -4335,7 +4443,7 @@ void CodeGenTileLangAscend910Dev::InitFuncState() {
 }
 
 void CodeGenTileLangAscend910Dev::AddFunction(const GlobalVar &gvar,
-                                          const PrimFunc &f) {
+                                              const PrimFunc &f) {
   InferFuncCoreType infer;
   infer.VisitStmt(f->body);
   if (!infer.hasExpert) {
@@ -4414,19 +4522,19 @@ CodeGenTileLangAscend910Dev::GetVarValue(const Buffer &buffer_data) const {
 }
 
 void CodeGenTileLangAscend910Dev::SetVarValue(const VarNode *v,
-                                          const mlir::Value &value) {
+                                              const mlir::Value &value) {
   ICHECK(!var_map_.empty()) << "var_map_ is empty, fail to set value";
   var_map_.back()[v] = value;
 }
 
 void CodeGenTileLangAscend910Dev::SetVarValue(const CallNode *region_node,
-                                          const mlir::Value &value) {
+                                              const mlir::Value &value) {
   tvm::tl::RegionOp regionop(region_node->args, this->vmap);
   SetVarValue(regionop.GetBuffer(), value);
 }
 
 void CodeGenTileLangAscend910Dev::SetVarValue(const Buffer &buffer_data,
-                                          const mlir::Value &value) {
+                                              const mlir::Value &value) {
   auto var_ptr = buffer_data->data.get();
   SetVarValue(var_ptr, value);
 }

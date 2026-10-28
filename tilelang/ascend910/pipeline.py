@@ -102,6 +102,9 @@ def Ascend910PassPipelineBody(mod: IRModule, target: Target) -> IRModule:
         if variant == "full":
             mod = tirx.transform.Simplify()(mod)
             mod = tirx.transform.RemoveNoOp()(mod)
+        _dump("before LegalizeNpuirBF16", mod)
+        mod = tilelang.transform.LegalizeNpuirBF16()(mod)
+        _dump("after LegalizeNpuirBF16", mod)
         _dump("before NpuLoopVectorize", mod)
         mod = tilelang.transform.NpuLoopVectorize()(mod)
         _dump("after NpuLoopVectorize", mod)

@@ -20,10 +20,10 @@
 #include <sstream>
 #include <string>
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/module.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/ffi/reflection/registry.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tirx/analysis.h>
 #include <tvm/tirx/buffer.h>
@@ -153,7 +153,7 @@ static std::map<tl::SyncBlockMode, mlir::hivm::SyncBlockInstrMode>
          mlir::hivm::SyncBlockInstrMode::INTER_SUBBLOCK_SYNCHRONIZATION},
         {tl::SyncBlockMode::INTRA_BLOCK,
          mlir::hivm::SyncBlockInstrMode::INTRA_BLOCK_SYNCHRONIZATION},
-    };
+};
 
 static llvm::SmallVector<int64_t>
 getBroadcastDim(const Array<PrimExpr> &buffer_shape0,
@@ -226,7 +226,7 @@ static std::map<std::string, mlir::hivm::DeinterleaveMode>
         {"CHANNEL_0", mlir::hivm::DeinterleaveMode::CHANNEL_0},
         {"CHANNEL_1", mlir::hivm::DeinterleaveMode::CHANNEL_1},
         {"ALL_CHANNELS", mlir::hivm::DeinterleaveMode::ALL_CHANNELS},
-    };
+};
 
 std::vector<int64_t> GetStrideFromShapeAPI(Array<tvm::PrimExpr> shape) {
   std::vector<int64_t> strides;
@@ -299,13 +299,15 @@ CodeGenTileLangAscend910Expert
 ******************************************************************************************
 ******************************************************************************************/
 
-mlir::Value CodeGenTileLangAscend910Expert::ScalarConvertType(const PrimExpr &imm,
-                                                       DataType targetDtype) {
+mlir::Value
+CodeGenTileLangAscend910Expert::ScalarConvertType(const PrimExpr &imm,
+                                                  DataType targetDtype) {
   auto castNode = std::make_unique<tirx::Cast>(targetDtype, imm);
   return MakeValue(*castNode);
 }
 
-CodeGenTileLangAscend910Expert::CodeGenTileLangAscend910Expert() : builder(&context) {
+CodeGenTileLangAscend910Expert::CodeGenTileLangAscend910Expert()
+    : builder(&context) {
   // Load MLIR dialects in the context
   this->context
       .loadDialect<mlir::func::FuncDialect, mlir::arith::ArithDialect,
@@ -322,9 +324,10 @@ std::string CodeGenTileLangAscend910Expert::Finish() {
   module->print(os);
 
   if (failed(mlir::verify(*module))) {
-    LOG(FATAL) << "CodeGenTileLangAscend910Expert: Generated MLIR module failed "
-                  "verification: \n"
-               << mlirCode;
+    LOG(FATAL)
+        << "CodeGenTileLangAscend910Expert: Generated MLIR module failed "
+           "verification: \n"
+        << mlirCode;
   }
 
   return mlirCode;
@@ -481,7 +484,8 @@ void CodeGenTileLangAscend910Expert::VisitStmt_(const tirx::ForNode *op) {
   this->VisitStmt(op->body);
 }
 
-void CodeGenTileLangAscend910Expert::VisitStmt_(const tirx::IfThenElseNode *op) {
+void CodeGenTileLangAscend910Expert::VisitStmt_(
+    const tirx::IfThenElseNode *op) {
 
   auto conditionValue = MakeValue(op->condition);
 
@@ -510,7 +514,8 @@ void CodeGenTileLangAscend910Expert::VisitStmt_(const tirx::IfThenElseNode *op) 
   builder.setInsertionPointAfter(ifOp);
 }
 
-mlir::Type CodeGenTileLangAscend910Expert::DTypetoMLIRType(DataType t) { // NOLINT(*)
+mlir::Type
+CodeGenTileLangAscend910Expert::DTypetoMLIRType(DataType t) { // NOLINT(*)
   int lanes = t.lanes();
   if (t.is_handle()) {
     // ICHECK(t.is_scalar()) << "do not yet support vector types";
@@ -792,8 +797,8 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const CastNode *op) {
   }
 }
 
-mlir::Value
-CodeGenTileLangAscend910Expert::GenSubviewFromRegion(const CallNode *region_node) {
+mlir::Value CodeGenTileLangAscend910Expert::GenSubviewFromRegion(
+    const CallNode *region_node) {
   tvm::tl::RegionOp regionop(region_node->args, this->vmap);
   return GenSubviewFromRegion(regionop.GetBuffer(), regionop.GetRanges());
 }
@@ -937,8 +942,9 @@ mlir::Value CodeGenTileLangAscend910Expert::GenRankReducedSubviewFromRegion(
       builder.getUnknownLoc(), reducedTy, v_value, offsets, sizes, strides);
 }
 
-mlir::Value CodeGenTileLangAscend910Expert::GenSubviewFromRegion(Buffer buffer_data,
-                                                          Array<Range> range) {
+mlir::Value
+CodeGenTileLangAscend910Expert::GenSubviewFromRegion(Buffer buffer_data,
+                                                     Array<Range> range) {
   /*
   range stores region details
     extent stores the shape or size of region
@@ -1006,8 +1012,9 @@ CodeGenTileLangAscend910Expert::CheckMLIRValueMap(mlir::Value val) {
   return std::pair(false, mlir::Value());
 }
 
-inline void CodeGenTileLangAscend910Expert::UpdateMLIRValueMap(const mlir::Value key,
-                                                        mlir::Value val) {
+inline void
+CodeGenTileLangAscend910Expert::UpdateMLIRValueMap(const mlir::Value key,
+                                                   mlir::Value val) {
   mlir::Block *curr_block = builder.getInsertionBlock();
   this->mlir_value_map[{key, curr_block}] = val;
 }
@@ -1015,15 +1022,17 @@ inline void CodeGenTileLangAscend910Expert::UpdateMLIRValueMap(const mlir::Value
 inline std::pair<bool, mlir::Value>
 CodeGenTileLangAscend910Expert::CheckPrimExprMap(const PrimExprNode *op) {
   mlir::Block *curr_block = builder.getInsertionBlock();
-  auto it = this->prim_expr_map.find({tvm::ffi::GetRef<PrimExpr>(op), curr_block});
+  auto it =
+      this->prim_expr_map.find({tvm::ffi::GetRef<PrimExpr>(op), curr_block});
   if (it != this->prim_expr_map.end()) {
     return std::pair(true, it->second);
   }
   return std::pair(false, mlir::Value());
 }
 
-inline void CodeGenTileLangAscend910Expert::UpdatePrimExprMap(const PrimExprNode *key,
-                                                       mlir::Value val) {
+inline void
+CodeGenTileLangAscend910Expert::UpdatePrimExprMap(const PrimExprNode *key,
+                                                  mlir::Value val) {
   mlir::Block *curr_block = builder.getInsertionBlock();
   this->prim_expr_map[{tvm::ffi::GetRef<PrimExpr>(key), curr_block}] = val;
 }
@@ -1037,9 +1046,8 @@ inline void CodeGenTileLangAscend910Expert::UpdatePrimExprMap(const PrimExprNode
   rhs contains right value
 */
 template <typename T, typename U>
-mlir::Value CodeGenTileLangAscend910Expert::BinaryOpCodegen(const PrimExprNode *op,
-                                                     U mode, mlir::Value lhs,
-                                                     mlir::Value rhs) {
+mlir::Value CodeGenTileLangAscend910Expert::BinaryOpCodegen(
+    const PrimExprNode *op, U mode, mlir::Value lhs, mlir::Value rhs) {
   // A child expression may be an unsupported call; do not build an MLIR op
   // with a null operand.
   if (!lhs || !rhs) {
@@ -1053,8 +1061,8 @@ mlir::Value CodeGenTileLangAscend910Expert::BinaryOpCodegen(const PrimExprNode *
     return result.second;
   }
   mlir::Value mlirVal;
-  if (lhs.getType() != rhs.getType() &&
-      lhs.getType().isIntOrIndex() && rhs.getType().isIntOrIndex()) {
+  if (lhs.getType() != rhs.getType() && lhs.getType().isIntOrIndex() &&
+      rhs.getType().isIntOrIndex()) {
     auto to_index = [&](mlir::Value v) {
       return v.getType().isIndex() ? v : CreateIndexCastOp(v);
     };
@@ -1151,7 +1159,7 @@ static mlir::OpFoldResult ComputeProjectedViewOffset(
 
 CodeGenTileLangAscend910Expert::SliceFacts
 CodeGenTileLangAscend910Expert::BuildSliceFacts(Buffer buffer_data,
-                                         Array<Range> range) {
+                                                Array<Range> range) {
   SliceFacts facts;
   facts.baseMemref = GetVarValue(buffer_data->data.get());
   facts.baseMemrefType =
@@ -1214,7 +1222,7 @@ CodeGenTileLangAscend910Expert::BuildSliceFacts(Buffer buffer_data,
 
 CodeGenTileLangAscend910Expert::CopyShapePlan
 CodeGenTileLangAscend910Expert::BuildCopyShapePlan(const SliceFacts &src,
-                                            const SliceFacts &dst) {
+                                                   const SliceFacts &dst) {
   struct ShapeExtract {
     llvm::SmallVector<int64_t> backbone;
     llvm::SmallVector<unsigned> backboneIdx;
@@ -1554,8 +1562,7 @@ void CodeGenTileLangAscend910Expert::VbrcCodegen(const CallNode *op) {
     is_region_call = in_call->op.same_as(Op::Get("tl.region"));
   }
   bool isScalar = !npuirop.in.as<tvm::tirx::Buffer>() &&
-                  !npuirop.in.as<tvm::tirx::BufferRegion>() &&
-                  !is_region_call;
+                  !npuirop.in.as<tvm::tirx::BufferRegion>() && !is_region_call;
   if (isScalar) {
     // Scalar case
     if (npuirop.in->dtype != npuirop.dst->dtype) {
@@ -1656,7 +1663,8 @@ void CodeGenTileLangAscend910Expert::VsortCodegen(const CallNode *op) {
                                       npuirop.descending, npuirop.sort_axis);
 }
 
-void CodeGenTileLangAscend910Expert::VsigmoidCodegen(const tvm::tirx::CallNode *op) {
+void CodeGenTileLangAscend910Expert::VsigmoidCodegen(
+    const tvm::tirx::CallNode *op) {
   tvm::tl::NpuirSigmoid npuirop(op->args, this->vmap);
   Value src = GenSubviewFromRegion(npuirop.src, npuirop.src_range);
   Value dst = GenSubviewFromRegion(npuirop.dst, npuirop.dst_range);
@@ -2008,7 +2016,7 @@ void CodeGenTileLangAscend910Expert::BitcastCodegen(const CallNode *op) {
 
 mlir::Value
 CodeGenTileLangAscend910Expert::GenMemrefLoadFromRegion(Buffer buffer_data,
-                                                 Array<Range> range) {
+                                                        Array<Range> range) {
   // Convert buffer from Buffer in TIR 2 memref in MLIR
   auto mem = GetVarValue(buffer_data->data.get());
 
@@ -2027,7 +2035,8 @@ CodeGenTileLangAscend910Expert::GenMemrefLoadFromRegion(Buffer buffer_data,
 }
 
 template <typename T>
-void CodeGenTileLangAscend910Expert::CreateHIVMBinaryVectorOp(const CallNode *op) {
+void CodeGenTileLangAscend910Expert::CreateHIVMBinaryVectorOp(
+    const CallNode *op) {
   tvm::tl::NpuirBinaryOperator binaryOp(op->args, this->vmap);
   ICHECK(binaryOp.Dst().IsTensor())
       << "The dst of a binary vector operator cannot be a scalar.";
@@ -2719,7 +2728,11 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const CallNode *op) {
     VreduceCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_sigmoid"))) {
     VsigmoidCodegen(op);
-  } else if (op->op.same_as(Op::Get("tl.npuir_cumsum"))) {
+  } else if (op->op.same_as(Op::Get("tl.npuir_cumsum")) ||
+             (op->op.as<OpNode>() &&
+              op->op.as<OpNode>()->name == "tl.cumsum") ||
+             (op->op.as<OpNode>() &&
+              op->op.as<OpNode>()->name == "tl.tileop.cumsum")) {
     VcumsumCodegen(op);
   } else if (op->op.same_as(Op::Get("tl.npuir_sort"))) {
     VsortCodegen(op);
@@ -2767,7 +2780,6 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const CallNode *op) {
   return mlir::Value();
 }
 
-
 void CodeGenTileLangAscend910Expert::VisitStmt_(const BindNode *op) {
   const VarNode *v = op->var.get();
   ICHECK(!var_map_.count(v));
@@ -2782,9 +2794,8 @@ void CodeGenTileLangAscend910Expert::VisitStmt_(const AttrStmtNode *op) {
     IterVar iv = Downcast<IterVar>(op->node);
     if ((iv->thread_tag == "blockIdx.x" || iv->thread_tag == "blockIdx.y" ||
          iv->thread_tag == "blockIdx.z") &&
-        !tirx::UsesVar(op->body, [&](const VarNode *v) {
-          return v == iv->var.get();
-        })) {
+        !tirx::UsesVar(op->body,
+                       [&](const VarNode *v) { return v == iv->var.get(); })) {
       VisitStmt(op->body);
       return;
     }
@@ -2826,7 +2837,8 @@ void CodeGenTileLangAscend910Expert::VisitStmt_(const AttrStmtNode *op) {
 }
 
 template <typename T>
-mlir::Value CodeGenTileLangAscend910Expert::GetAndCastIndexOp(const IterVar iv) {
+mlir::Value
+CodeGenTileLangAscend910Expert::GetAndCastIndexOp(const IterVar iv) {
   auto indexOp = builder.create<T>(mlir::UnknownLoc::get(&context));
   auto truncOp = builder.create<mlir::arith::TruncIOp>(
       mlir::UnknownLoc::get(&context),
@@ -2865,8 +2877,9 @@ void CodeGenTileLangAscend910Expert::VisitStmt_(const AllocBufferNode *op) {
     auto memorySpaceHIVMAttr =
         mlir::hivm::AddressSpaceAttr::get(builder.getContext(), address_space);
 
-    auto memrefType = mlir::MemRefType::get(shape, DTypetoMLIRType(op->buffer->dtype),
-                                            layoutMap, memorySpaceHIVMAttr);
+    auto memrefType =
+        mlir::MemRefType::get(shape, DTypetoMLIRType(op->buffer->dtype),
+                              layoutMap, memorySpaceHIVMAttr);
 
     auto allocOp = builder.create<mlir::memref::AllocOp>(
         builder.getUnknownLoc(), memrefType);
@@ -2875,7 +2888,6 @@ void CodeGenTileLangAscend910Expert::VisitStmt_(const AllocBufferNode *op) {
     ICHECK(!var_map_.count(op->buffer->data.get()));
     var_map_[op->buffer->data.get()] = allocOp.getResult();
   }
-
 }
 
 mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const MinNode *op) {
@@ -2985,8 +2997,10 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const MulNode *op) {
 }
 
 mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const AndNode *op) {
-  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() || op->a.dtype().is_bool());
-  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() || op->b.dtype().is_bool());
+  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() ||
+        op->a.dtype().is_bool());
+  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() ||
+        op->b.dtype().is_bool());
   auto lhs = MakeValue(op->a);
   auto rhs = MakeValue(op->b);
   auto mlirVal = BinaryOpCodegen<mlir::arith::AndIOp, std::nullptr_t>(
@@ -2995,8 +3009,10 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const AndNode *op) {
 }
 
 mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const OrNode *op) {
-  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() || op->a.dtype().is_bool());
-  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() || op->b.dtype().is_bool());
+  CHECK(op->a.dtype().is_int() || op->a.dtype().is_uint() ||
+        op->a.dtype().is_bool());
+  CHECK(op->b.dtype().is_int() || op->b.dtype().is_uint() ||
+        op->b.dtype().is_bool());
   auto lhs = MakeValue(op->a);
   auto rhs = MakeValue(op->b);
   auto mlirVal = BinaryOpCodegen<mlir::arith::OrIOp, std::nullptr_t>(
@@ -3025,8 +3041,8 @@ String CodeGenTileLangAscend910Expert::GetCurrentFunctionName() {
   return this->current_function_name;
 }
 
-void CodeGenTileLangAscend910Expert::AddFunctionForCoreType(const GlobalVar &gvar,
-                                                     const PrimFunc &f) {
+void CodeGenTileLangAscend910Expert::AddFunctionForCoreType(
+    const GlobalVar &gvar, const PrimFunc &f) {
   // clear previous generated state.
   this->InitFuncState();
 
@@ -3153,7 +3169,7 @@ void CodeGenTileLangAscend910Expert::InitFuncState() {
 }
 
 void CodeGenTileLangAscend910Expert::AddFunction(const GlobalVar &gvar,
-                                          const PrimFunc &f) {
+                                                 const PrimFunc &f) {
   InferFuncCoreType infer;
   infer.VisitStmt(f->body);
 
@@ -3182,7 +3198,8 @@ void CodeGenTileLangAscend910Expert::AddFunction(const GlobalVar &gvar,
 
 // New Expr functions after removing inheritance form CodeGenC class
 
-mlir::Value CodeGenTileLangAscend910Expert::GetVarValue(const VarNode *v) const {
+mlir::Value
+CodeGenTileLangAscend910Expert::GetVarValue(const VarNode *v) const {
   auto it = var_map_.find(v);
   ICHECK(it != var_map_.end()) << "cannot find variable " << v->name_hint;
   return it->second;
@@ -3192,7 +3209,8 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const VarNode *op) {
   return GetVarValue(op);
 }
 
-mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const StringImmNode *op) {
+mlir::Value
+CodeGenTileLangAscend910Expert::VisitExpr_(const StringImmNode *op) {
   // Todo: Implementation pending
   LOG(FATAL) << "StringImmNode case not supported!";
 }
@@ -3240,7 +3258,8 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const LetNode *op) {
   return MakeValue(op->body);
 }
 
-mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const BufferLoadNode *op) {
+mlir::Value
+CodeGenTileLangAscend910Expert::VisitExpr_(const BufferLoadNode *op) {
   auto buffer = op->buffer;
   auto indices = op->indices;
 
@@ -3277,7 +3296,8 @@ mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const ShuffleNode *op) {
   LOG(FATAL) << "ShuffleNode case not supported!";
 }
 
-mlir::Value CodeGenTileLangAscend910Expert::VisitExpr_(const BroadcastNode *op) {
+mlir::Value
+CodeGenTileLangAscend910Expert::VisitExpr_(const BroadcastNode *op) {
   // Todo: Implementation pending
   LOG(FATAL) << "BroadcastNode case not supported!";
 }

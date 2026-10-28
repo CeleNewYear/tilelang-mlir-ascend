@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import ctypes
 import importlib.util
+import contextlib
 import os
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -32,7 +34,7 @@ from tilelang.utils.npu_utils import (
 )
 
 from . import compiler as bishengir
-from .runtime import convert_sigtype_to_int, generate_npu_wrapper_src
+from .runtime import generate_npu_wrapper_src
 
 __all__ = [
     "Ascend910Compiler",
@@ -43,6 +45,68 @@ __all__ = [
 ]
 
 _EXPERT_MODES = {"", "expert", "exp", "e"}
+
+#: Suffix of the callback bishengir-compile emits for kernels that need scratch
+#: memory.  Its return value is the workspace size in bytes *per block*.
+_WORKSPACE_SUFFIX = "_infer_workspace_shape_function"
+
+
+def _find_infer_symbols(lib_path: str, suffix: str) -> list[str]:
+    """Symbols in *lib_path* ending with *suffix* (dynamic table first)."""
+
+    found: list[str] = []
+    for nm_args in (["-D"], []):
+        try:
+            result = subprocess.run(
+                ["nm", *nm_args, lib_path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+            continue
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 3 and parts[2].endswith(suffix) and parts[2] not in found:
+                found.append(parts[2])
+        if found:
+            break
+    return found
+
+
+def infer_workspace_size(lib_path: str | os.PathLike[str] | None, suffix: str = _WORKSPACE_SUFFIX) -> int:
+    """Workspace bytes per block declared by a compiled kernel's shared object.
+
+    ``0`` means the kernel needs no scratch memory, in which case the launcher
+    passes ``nullptr`` instead of allocating.  The callback is only generated for
+    kernels that actually need a workspace, so its absence is meaningful and must
+    not be papered over with a fixed size.
+    """
+
+    if lib_path is None:
+        return 0
+    lib_path = os.fspath(lib_path)
+    if not os.path.exists(lib_path):
+        return 0
+    symbols = _find_infer_symbols(lib_path, suffix)
+    if not symbols:
+        return 0
+    try:
+        lib = ctypes.CDLL(lib_path)
+    except OSError:
+        return 0
+    for func_name in symbols:
+        try:
+            func = getattr(lib, func_name)
+            func.restype = ctypes.c_int64
+            func.argtypes = []
+            size = int(func())
+        except (AttributeError, OSError, TypeError):
+            continue
+        return size if size > 0 else 0
+    return 0
 
 
 def ascend910_mode() -> str:
@@ -339,6 +403,8 @@ def replace_by_longest_key(text: str, replace_map) -> str:
     for key in sorted(replace_map, key=lambda x: (-len(x), x)):
         text = text.replace(key, str(replace_map[key]))
     return text
+
+
 # ---------------------------------------------------------------------------
 # compiler
 # ---------------------------------------------------------------------------
@@ -375,26 +441,40 @@ class Ascend910Compiler:
                     developer=developer,
                 )
             )
-            return None, command, exc
-        return result.object_path, result.command, None
+            return None, command, exc, None
+        return result.object_path, result.command, None, result.shared_object_path
 
     def _compile_or_cache(self, raw_mlir: str, pass_configs, developer: bool):
         key = bishengir.make_key(raw_mlir, pass_configs=pass_configs, developer=developer)
         root, cached_object = bishengir.cache_paths(key)
         cached_mlir = root / "kernel.npuir"
         if cached_object.is_file() and cached_mlir.is_file():
-            return cached_mlir.read_text(), cached_object, None, None
+            shared = bishengir.cache_shared_path(key)
+            return (
+                cached_mlir.read_text(),
+                cached_object,
+                shared if shared.is_file() else None,
+                None,
+                None,
+            )
         opt_mlir, opt_command = self._optimize(raw_mlir)
-        object_path, compile_command, error = self._compile(opt_mlir, pass_configs, developer)
+        object_path, compile_command, error, shared_object_path = self._compile(opt_mlir, pass_configs, developer)
         if error is not None:
             # Golden comparison harnesses need the MLIR of kernels that the
             # installed bishengir-compile rejects (the legacy backend fails on
             # the same input).  Production keeps the error.
             if os.environ.get("TILELANG_ASCEND910_ALLOW_COMPILE_FAILURE") != "1":
                 raise error
-            return opt_mlir, None, opt_command, compile_command
-        stored = bishengir.cache_save(key, opt_mlir, object_path)
-        return opt_mlir, stored, opt_command, compile_command
+            return opt_mlir, None, None, opt_command, compile_command
+        stored = bishengir.cache_save(key, opt_mlir, object_path, shared_object_path)
+        shared = bishengir.cache_shared_path(key)
+        return (
+            opt_mlir,
+            stored,
+            shared if shared.is_file() else None,
+            opt_command,
+            compile_command,
+        )
 
     def _precompile_header(self, header_src: str) -> str:
         """Build (and cache) the precompiled launcher header."""
@@ -448,18 +528,31 @@ class Ascend910Compiler:
         return launcher_so, command
 
     # -- public API -----------------------------------------------------------
-    def compile(self, func, raw_mlir: str, out_idx=None, pass_configs=None) -> "Ascend910JitKernel":
+    def compile(
+        self,
+        func,
+        raw_mlir: str,
+        out_idx=None,
+        pass_configs=None,
+        device_mod=None,
+    ) -> Ascend910JitKernel:
         developer = ascend910_mode() == "developer"
-        mlir, object_path, opt_command, compile_command = self._compile_or_cache(
-            raw_mlir, pass_configs, developer
-        )
+        mlir, object_path, shared_object_path, opt_command, compile_command = self._compile_or_cache(raw_mlir, pass_configs, developer)
         metadata = parse_metadata(mlir)
         signature = parse_signature(mlir, developer=developer)
         need_debug = check_debug_op(func)
+        # The launcher allocates ``workspace_size * blockNum`` bytes of scratch on
+        # the device; a kernel that declares a callback but is launched with
+        # nullptr writes through a null pointer and aborts the runtime.
+        workspace_size = infer_workspace_size(shared_object_path)
+        override = os.environ.get("TILELANG_ASCEND_WORKSPACE_SIZE")
+        if override is not None:
+            with contextlib.suppress(ValueError):
+                workspace_size = int(override)
         wrapper_src = generate_npu_wrapper_src(
             {},
             signature,
-            0,
+            workspace_size,
             metadata["mix_mode"],
             -1,
             0,
@@ -470,11 +563,10 @@ class Ascend910Compiler:
             True,
         )
         header_src = get_npu_launcher_header()
-        launcher_path, launcher_command = self._build_launcher(
-            metadata["kernel_name"], header_src, wrapper_src
-        )
+        launcher_path, launcher_command = self._build_launcher(metadata["kernel_name"], header_src, wrapper_src)
         return Ascend910JitKernel(
             func=func,
+            device_mod=device_mod,
             raw_mlir=raw_mlir,
             mlir=mlir,
             object_path=str(object_path) if object_path is not None else "",
@@ -500,6 +592,7 @@ class Ascend910JitKernel:
         self,
         *,
         func,
+        device_mod=None,
         raw_mlir: str,
         mlir: str,
         object_path: str,
@@ -514,6 +607,7 @@ class Ascend910JitKernel:
         launcher_command,
     ) -> None:
         self.func = func
+        self.device_mod = device_mod
         self.raw_mlir = raw_mlir
         self.mlir = mlir
         self.object_path = object_path
@@ -539,7 +633,18 @@ class Ascend910JitKernel:
             "tensor_kinds": metadata["tensor_kinds"],
         }
         extractor = LaunchThreadExtractor()
-        grid_expr = extractor.extract(func, "blockIdx.x") if func is not None else None
+        # The grid extent only exists after lowering: the pre-lowering PrimFunc
+        # spells the launch as a ``T.thread_binding`` For, while the lowered
+        # device module carries the ``thread_extent`` AttrStmt the extractor
+        # looks for.  Prefer the lowered module so the grid is not lost.
+        grid_node = func
+        if device_mod is not None:
+            functions = getattr(device_mod, "functions", None)
+            if functions is not None:
+                grid_node = next(iter(functions.values()), func)
+            else:
+                grid_node = device_mod
+        grid_expr = extractor.extract(grid_node, "blockIdx.x") if grid_node is not None else None
         self.gridfunc = str(grid_expr) if grid_expr is not None else "1"
         self.launch_grid = [1, 1, 1]
         self._extra_args: list = []
@@ -605,14 +710,10 @@ class Ascend910JitKernel:
 
     def _load(self):
         if self._loaded is None:
-            import torch_npu
-
             device = torch.npu.current_device()
             with open(self.object_path, "rb") as handle:
                 binary = handle.read()
-            self._loaded = NPUUtils.get().load_binary(
-                self.utils_name, binary, self.metadata["shared"], device, self.mix_mode
-            )
+            self._loaded = NPUUtils.get().load_binary(self.utils_name, binary, self.metadata["shared"], device, self.mix_mode)
         return self._loaded
 
     def _calcu_grid(self, orig_to_input, *args):
@@ -695,6 +796,22 @@ class Ascend910JitKernel:
         full_args.extend(self._extra_args)
 
         _, npu_function, _, _ = self._load()
+        try:
+            self._launch_with(npu_function, full_args)
+        except TypeError:
+            # A stale cached launcher reports a wrong argument count through
+            # the C entry point.  Rebuild it once (bypassing the cache) and
+            # retry before surfacing the error.
+            self._rebuild_launcher()
+            self._launch_with(npu_function, full_args)
+
+        if self.out_idx is None:
+            return None
+        if len(self.out_idx) == 1:
+            return full_args[self.out_idx[0]]
+        return [full_args[i] for i in self.out_idx]
+
+    def _launch_with(self, npu_function, full_args) -> None:
         self._get_launcher().launch(
             self.launch_grid[0],
             self.launch_grid[1],
@@ -708,11 +825,34 @@ class Ascend910JitKernel:
             *full_args,
         )
 
-        if self.out_idx is None:
-            return None
-        if len(self.out_idx) == 1:
-            return full_args[self.out_idx[0]]
-        return [full_args[i] for i in self.out_idx]
+    def _rebuild_launcher(self) -> None:
+        """Rebuild the launch wrapper in a private directory.
+
+        The shared launcher cache is content addressed, but a reused entry can
+        still describe a different argument count (for example when a kernel is
+        compiled with and without ``out_idx``).  Building into a fresh directory
+        guarantees the wrapper matches ``self.wrapper_src``.
+        """
+
+        import tempfile
+        from pathlib import Path
+
+        from tilelang.utils.npu_utils import build_npu_ext
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="a910-launcher-"))
+        cxx_path = tmp_dir / "launcher.cxx"
+        cxx_path.write_text(self.wrapper_src)
+        so_path = tmp_dir / "launcher.so"
+        build_npu_ext(
+            "launcher",
+            get_npu_launcher_header(),
+            str(cxx_path),
+            kernel_launcher="torch",
+            precompile=True,
+            output_path=str(so_path),
+        )
+        self.launcher_path = str(so_path)
+        self._launcher = None
 
     # -- introspection --------------------------------------------------------
     def get_kernel_source(self) -> str:
@@ -730,6 +870,4 @@ class Ascend910JitKernel:
         return Profiler(self.params, self.out_idx or [], *args, **kwargs).with_direct_func(self)
 
     def benchmark(self, warmup: int = 25, rep: int = 100, n_warmup: int = 1, n_repeat: int = 1) -> float:
-        return self.get_profiler().do_bench(
-            func=self, warmup=warmup, rep=rep, n_warmup=n_warmup, n_repeat=n_repeat
-        )
+        return self.get_profiler().do_bench(func=self, warmup=warmup, rep=rep, n_warmup=n_warmup, n_repeat=n_repeat)

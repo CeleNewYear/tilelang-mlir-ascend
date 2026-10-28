@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 _ENV_COMPILER = "TILELANG_NPU_COMPILER_PATH"
 _ENV_OPT = "TILELANG_NPU_OPT_PATH"
@@ -57,8 +57,7 @@ def _find_tool(name: str, env_var: str, *, required_by: str) -> str:
         return found
 
     raise RuntimeError(
-        f"Cannot find {name} (needed for {required_by}). Set {env_var}, or source "
-        "the CANN set_env.sh so tools/bishengir/bin is on PATH."
+        f"Cannot find {name} (needed for {required_by}). Set {env_var}, or source the CANN set_env.sh so tools/bishengir/bin is on PATH."
     )
 
 
@@ -144,7 +143,14 @@ def opt_options() -> list[str]:
     ``--enable-triton-kernel-compile=true``.
     """
 
-    return ["--canonicalize", "--adapt-triton-kernel"]
+    # NOTE: ``--canonicalize`` used to run here as well, but its memref
+    # canonicalization folds the ``copy(gm -> ub); copy(ub -> gm)`` staging pair
+    # into a single ``memref.copy`` whose source and destination are both in the
+    # GM address space.  HIVM supports only gm<->ub and ub<->ub copies, so
+    # bishengir-compile then crashes (SIGSEGV) on the resulting module.
+    # ``--adapt-triton-kernel`` is the pass the ``--enable-triton-kernel-compile``
+    # option needs, so keep it alone.
+    return ["--adapt-triton-kernel"]
 
 
 def opt_command(opt: str, mlir_path: str | os.PathLike[str], out_path: str | os.PathLike[str]) -> list[str]:
@@ -182,11 +188,7 @@ def optimize_mlir(mlir: str, *, opt: str | None = None, timeout: int = 600, verb
         print("bishengir-opt:", shlex.join(command))
     proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0 or not dst.is_file():
-        raise RuntimeError(
-            "bishengir-opt failed.\n"
-            f"Command: {shlex.join(command)}\n"
-            f"Output:\n{proc.stderr or proc.stdout}"
-        )
+        raise RuntimeError(f"bishengir-opt failed.\nCommand: {shlex.join(command)}\nOutput:\n{proc.stderr or proc.stdout}")
     return OptimizeResult(mlir=dst.read_text(), command=tuple(command), path=dst)
 
 
@@ -237,7 +239,12 @@ def compile_mlir(
 def _cache_root() -> Path:
     base = os.environ.get(_CACHE_ENV)
     root = Path(base).expanduser() if base else Path.home() / ".tilelang" / "cache"
-    return root / _CACHE_SUBDIR
+    # pytest-xdist workers run with ``TILELANG_CLEAR_CACHE=1`` and each of them
+    # wipes the *shared* cache on import, deleting artifacts another worker is
+    # still writing or loading (intermittent precision failures / truncated
+    # ``.so``).  Give every worker its own namespace so clearing is safe.
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    return root / _CACHE_SUBDIR / worker if worker else root / _CACHE_SUBDIR
 
 
 def _compiler_stamp() -> str:
@@ -275,11 +282,39 @@ def cache_load(key: str) -> Path | None:
     return obj if obj.is_file() else None
 
 
-def cache_save(key: str, mlir: str, object_path: str | os.PathLike[str]) -> Path:
+def cache_shared_path(key: str) -> Path:
+    """Path of the cached shared object (``libkernel.so``) for *key*."""
+
+    root, _ = cache_paths(key)
+    return root / "libkernel.so"
+
+
+def cache_save(
+    key: str,
+    mlir: str,
+    object_path: str | os.PathLike[str],
+    shared_object_path: str | os.PathLike[str] | None = None,
+) -> Path:
     root, obj = cache_paths(key)
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(object_path, obj)
-    (root / "kernel.npuir").write_text(mlir)
+
+    # Several processes (e.g. pytest-xdist workers) may compile the same kernel
+    # concurrently into the shared cache directory; publish each artifact with an
+    # atomic rename so a reader never observes a half-written file.
+    def _publish(src, dst: Path) -> None:
+        tmp = dst.with_name(dst.name + f".tmp{os.getpid()}")
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+
+    _publish(object_path, obj)
+    # ``libkernel.so`` carries the ``*_infer_workspace_shape_function`` callback
+    # the launcher needs to size its per-block scratch buffer, so it has to
+    # survive alongside the device object.
+    if shared_object_path is not None and Path(shared_object_path).is_file():
+        _publish(shared_object_path, cache_shared_path(key))
+    tmp_mlir = (root / "kernel.npuir").with_name(f"kernel.npuir.tmp{os.getpid()}")
+    tmp_mlir.write_text(mlir)
+    os.replace(tmp_mlir, root / "kernel.npuir")
     (root / "metadata.json").write_text(
         json.dumps({"format": 1, "key": key, "compiler": _compiler_stamp()}, indent=2, sort_keys=True) + "\n"
     )

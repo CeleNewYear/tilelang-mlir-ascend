@@ -31,17 +31,31 @@ class _A2KernelFrame:
         self._frame = frame
         self._npu = npu
 
+    def _sub_block_var(self):
+        """Vector sub-block id (``blockIdx.z``) supplied by the launch frame."""
+        try:
+            return self._frame.get_thread_binding(2)
+        except Exception:
+            return None
+
     def __enter__(self):
         value = self._frame.__enter__()
         if not self._npu:
             return value
         _set_active(True)
+        sub = self._sub_block_var()
         if isinstance(value, (list, tuple)):
             values = list(value)
             if len(values) == 1:
-                return values[0], 0
-            return tuple(values[:2])
-        return value, 0
+                return values[0], (sub if sub is not None else 0)
+            # 2-D grid: the legacy NPU frame yielded ``(bx, by, subid)``.
+            # ``launch_kernel`` may already expose the sub-block id, so only
+            # append it when the frame stopped at the block coordinates.
+            if len(values) == 2:
+                return values[0], values[1], (sub if sub is not None else 0)
+            return tuple(values)
+        # A 1-D grid yields the block var directly (not a list).
+        return value, (sub if sub is not None else 0)
 
     def __exit__(self, ptype, value, trace):
         try:

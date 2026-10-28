@@ -8,7 +8,8 @@ source generation and execution).
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from tilelang.jit.adapter.base import BaseKernelAdapter
 
@@ -54,6 +55,7 @@ class Ascend910KernelAdapter(BaseKernelAdapter):
             device_kernel_source,
             out_idx=out_idx,
             pass_configs=self.pass_configs,
+            device_mod=device_mod,
         )
         self.func = self.kernel
 

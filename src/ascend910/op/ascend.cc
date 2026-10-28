@@ -18,12 +18,10 @@
 namespace tvm {
 namespace tl {
 
-
 using namespace tirx;
-using tvm::ffi::StructuralEqual;
 using tvm::ffi::Array;
 using tvm::ffi::Map;
-
+using tvm::ffi::StructuralEqual;
 
 RegionOp::RegionOp(Array<PrimExpr> args, BufferMap vmap) {
   size_t n = args.size();
@@ -42,8 +40,10 @@ RegionOp::RegionOp(Array<PrimExpr> args, BufferMap vmap) {
 
 bool RegionOp::IsFullRegion() const {
   for (size_t i = 0; i < ranges_.size(); i++) {
-    if (!is_zero(ranges_[i]->min)) return false;
-    if (!StructuralEqual()(ranges_[i]->extent, buffer_->shape[i])) return false;
+    if (!is_zero(ranges_[i]->min))
+      return false;
+    if (!StructuralEqual()(ranges_[i]->extent, buffer_->shape[i]))
+      return false;
   }
   return true;
 }
@@ -127,8 +127,8 @@ NpuirBinaryOperator::NpuirBinaryOperator(Array<PrimExpr> args, BufferMap vmap) {
   dst_ = NpuirOperand::FromExpr(args[2], vmap);
 }
 
-#define NPUIR_BINARY_OP_REGISTER(OPNAME, opname)                               \
-  
+#define NPUIR_BINARY_OP_REGISTER(OPNAME, opname)
+
 NPUIR_BINARY_OP_REGISTER(Add, add)
 NPUIR_BINARY_OP_REGISTER(Sub, sub)
 NPUIR_BINARY_OP_REGISTER(Mul, mul)
@@ -157,8 +157,8 @@ NPUIR_BINARY_OP_REGISTER(FloorDiv, floordiv)
     std::tie(this->src, this->dst) = std::tie(bf[0], bf[1]);                   \
     std::tie(this->src_range, this->dst_range) = std::tie(rgs[0], rgs[1]);     \
     op_name = "hivm.hir.v" #opname;                                            \
-  }                                                                            \
-  
+  }
+
 NPUIR_UNARY_OP_CTOR(Exp, exp)
 NPUIR_UNARY_OP_CTOR(Ln, ln)
 NPUIR_UNARY_OP_CTOR(Relu, relu)
@@ -353,11 +353,20 @@ NpuirCumsum::NpuirCumsum(Array<PrimExpr> args, BufferMap vmap) {
   std::tie(this->src, this->dst) = std::tie(bf[0], bf[1]);
   std::tie(this->src_range, this->dst_range) = std::tie(rgs[0], rgs[1]);
 
-  std::string str_cum_dims = args[2].as<StringImmNode>()->value;
-  std::stringstream ss(str_cum_dims);
-  std::string dim;
-  while (std::getline(ss, dim, ',')) {
-    cum_dims.push_back(std::stoi(dim));
+  // The legacy frontend passed the axes as a comma separated string
+  // (``T.npuir_cumsum(..., "0", reverse)``); v0.1.15's ``T.cumsum`` passes a
+  // plain integer instead.  Accept both instead of dereferencing a null
+  // StringImmNode.
+  if (const auto *str_dims = args[2].as<StringImmNode>()) {
+    std::stringstream ss(str_dims->value);
+    std::string dim;
+    while (std::getline(ss, dim, ',')) {
+      cum_dims.push_back(std::stoi(dim));
+    }
+  } else if (const auto *int_dim = args[2].as<IntImmNode>()) {
+    cum_dims.push_back(int_dim->value);
+  } else {
+    ICHECK(false) << "cumsum dim must be a StringImm or IntImm";
   }
   reverse = args[3].as<Bool>().value();
 }
@@ -747,41 +756,6 @@ NpuirVTanh::NpuirVTanh(Array<PrimExpr> args, BufferMap vmap) {
     this->srcs_range.push_back(rg);
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 } // namespace tl
 } // namespace tvm

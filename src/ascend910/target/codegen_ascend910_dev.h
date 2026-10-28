@@ -10,13 +10,13 @@
 #define CODEGEN_ASCEND910_DEV_H
 
 #include "../op/ascend.h"
-#include <map>
 #include "codegen_ascend910.h"
 #include "mlir/IR/Value.h"
 #include "target/source/codegen_c.h"
 #include <assert.h>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <tvm/arith/analyzer.h>
 #include <tvm/ir/module.h>
@@ -291,7 +291,8 @@ private:
   std::vector<long int> GetShape(Array<PrimExpr> extents);
   Array<PrimExpr> GetShape(const Array<Range> &ranges);
 
-  friend void PrintConst(const FloatImmNode *op, CodeGenTileLangAscend910Dev *p);
+  friend void PrintConst(const FloatImmNode *op,
+                         CodeGenTileLangAscend910Dev *p);
 
   mlir::Value GenMemrefLoadFromRegion(const BufferLoadNode *op);
   mlir::Value GenSubviewFromRegion(const CallNode *region_node);
@@ -379,9 +380,10 @@ private:
   CreateSameRankDynamicSubview(mlir::Value base,
                                llvm::ArrayRef<mlir::OpFoldResult> sizesSameRank,
                                mlir::Location loc);
-  llvm::SmallVector<int64_t> ComputeUBAllocShapeFromDstRange(
-      mlir::RankedTensorType dst_tensor_type_ori,
-      llvm::ArrayRef<mlir::OpFoldResult> dstR_sizes);
+  llvm::SmallVector<int64_t>
+  ComputeUBAllocShapeFromDstRange(mlir::RankedTensorType dst_tensor_type_ori,
+                                  llvm::ArrayRef<mlir::OpFoldResult> dstR_sizes,
+                                  bool keep_dynamic = false);
 
   NPU_CORETYPE func_coretype;
 

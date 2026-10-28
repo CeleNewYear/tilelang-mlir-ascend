@@ -78,21 +78,76 @@ def copy(*args, **kwargs):  # noqa: F811
     return _CoreCopy(*args, **kwargs)
 
 
+def print(obj=None, msg="", **kwargs):  # noqa: F811,A001
+    """Route ``T.print`` to the Ascend dialect while lowering an A2 kernel.
+
+    The CUDA/default implementation gates the print on ``threadIdx``, which the
+    ``ascend910`` target rejects ("no SIMT threads").  The Ascend dialect prints
+    from every core, matching the A2 execution model.
+    """
+
+    if _a3_active():
+        from tilelang.ascend.language.print import print as _ascend_print
+
+        return _ascend_print(obj, msg)
+    from tilelang.cuda.language.print import print as _core_print
+
+    return _core_print(obj, msg, **kwargs)
+
+
 def alloc_ub(shape, dtype, scope="shared"):
     return _core_alloc_shared(shape, dtype, scope=scope)
 
 
 _A2_OP_NAMES = [
-    "npuir_abs", "npuir_add", "npuir_and", "npuir_arange", "npuir_atomic_add",
-    "npuir_bitcast", "npuir_brc", "npuir_cast", "npuir_cmp", "npuir_concat",
-    "npuir_cumsum", "npuir_deinterleave", "npuir_div", "npuir_dot", "npuir_exp",
-    "npuir_exp2", "npuir_flip", "npuir_gather", "npuir_interleave", "npuir_ln",
-    "npuir_load_nd2nz", "npuir_max", "npuir_min", "npuir_mul", "npuir_not",
-    "npuir_or", "npuir_pad", "npuir_pow", "npuir_rec", "npuir_reduce",
-    "npuir_relu", "npuir_reshape", "npuir_rsqrt", "npuir_select", "npuir_shl",
-    "npuir_shr", "npuir_sigmoid", "npuir_sort", "npuir_sqrt",
-    "npuir_store_fixpipe", "npuir_store_nz2nd", "npuir_sub", "npuir_transpose",
-    "npuir_vcos", "npuir_verf", "npuir_vsin", "npuir_vtanh", "npuir_xor",
+    "npuir_abs",
+    "npuir_add",
+    "npuir_and",
+    "npuir_arange",
+    "npuir_atomic_add",
+    "npuir_bitcast",
+    "npuir_brc",
+    "npuir_cast",
+    "npuir_cmp",
+    "npuir_concat",
+    "npuir_cumsum",
+    "npuir_deinterleave",
+    "npuir_div",
+    "npuir_dot",
+    "npuir_exp",
+    "npuir_exp2",
+    "npuir_flip",
+    "npuir_gather",
+    "npuir_interleave",
+    "npuir_ln",
+    "npuir_load_nd2nz",
+    "npuir_max",
+    "npuir_min",
+    "npuir_mul",
+    "npuir_not",
+    "npuir_or",
+    "npuir_pad",
+    "npuir_pow",
+    "npuir_rec",
+    "npuir_reduce",
+    "npuir_relu",
+    "npuir_reshape",
+    "npuir_rsqrt",
+    "npuir_select",
+    "npuir_shl",
+    "npuir_shr",
+    "npuir_sigmoid",
+    "npuir_sort",
+    "npuir_sqrt",
+    "npuir_store_fixpipe",
+    "npuir_store_nz2nd",
+    "npuir_sub",
+    "npuir_transpose",
+    "npuir_vcos",
+    "npuir_verf",
+    "npuir_vsin",
+    "npuir_vtanh",
+    "npuir_xor",
 ]
 
 
@@ -110,31 +165,64 @@ for _name in _A2_OP_NAMES:
     globals()[_name] = _make_a2_op(_name)
 
 _A2_ALIASES = {
-    "vadd": "npuir_add", "vsub": "npuir_sub", "vmul": "npuir_mul",
-    "vdiv": "npuir_div", "vmax": "npuir_max", "vmin": "npuir_min",
-    "vor": "npuir_or", "vand": "npuir_and", "vxor": "npuir_xor",
-    "vpow": "npuir_pow", "vshl": "npuir_shl", "vshr": "npuir_shr",
-    "vexp": "npuir_exp", "vexp2": "npuir_exp2", "vrelu": "npuir_relu",
-    "vsigmoid": "npuir_sigmoid", "vln": "npuir_ln", "vlog2": "npuir_log2", "vsqrt": "npuir_sqrt",
-    "vrsqrt": "npuir_rsqrt", "vabs": "npuir_abs", "vrec": "npuir_rec",
-    "vnot": "npuir_not", "vselect": "npuir_select", "vcmp": "npuir_cmp",
-    "vdot": "npuir_dot", "vbrc": "npuir_brc", "vcast": "npuir_cast",
-    "vreduce": "npuir_reduce", "vcumsum": "npuir_cumsum", "vsort": "npuir_sort",
-    "vtranspose": "npuir_transpose", "vinterleave": "npuir_interleave",
-    "vdeinterleave": "npuir_deinterleave", "varange": "npuir_arange",
-    "vconcat": "npuir_concat", "vpad": "npuir_pad", "vflip": "npuir_flip",
-    "vbitcast": "npuir_bitcast", "vcos": "npuir_vcos", "vsin": "npuir_vsin",
-    "verf": "npuir_verf", "vtanh": "npuir_vtanh",
+    "vadd": "npuir_add",
+    "vsub": "npuir_sub",
+    "vmul": "npuir_mul",
+    "vdiv": "npuir_div",
+    "vmax": "npuir_max",
+    "vmin": "npuir_min",
+    "vor": "npuir_or",
+    "vand": "npuir_and",
+    "vxor": "npuir_xor",
+    "vpow": "npuir_pow",
+    "vshl": "npuir_shl",
+    "vshr": "npuir_shr",
+    "vexp": "npuir_exp",
+    "vexp2": "npuir_exp2",
+    "vrelu": "npuir_relu",
+    "vsigmoid": "npuir_sigmoid",
+    "vln": "npuir_ln",
+    "vlog2": "npuir_log2",
+    "vsqrt": "npuir_sqrt",
+    "vrsqrt": "npuir_rsqrt",
+    "vabs": "npuir_abs",
+    "vrec": "npuir_rec",
+    "vnot": "npuir_not",
+    "vselect": "npuir_select",
+    "vcmp": "npuir_cmp",
+    "vdot": "npuir_dot",
+    "vbrc": "npuir_brc",
+    "vcast": "npuir_cast",
+    "vreduce": "npuir_reduce",
+    "vcumsum": "npuir_cumsum",
+    "vsort": "npuir_sort",
+    "vtranspose": "npuir_transpose",
+    "vinterleave": "npuir_interleave",
+    "vdeinterleave": "npuir_deinterleave",
+    "varange": "npuir_arange",
+    "vconcat": "npuir_concat",
+    "vpad": "npuir_pad",
+    "vflip": "npuir_flip",
+    "vbitcast": "npuir_bitcast",
+    "vcos": "npuir_vcos",
+    "vsin": "npuir_vsin",
+    "verf": "npuir_verf",
+    "vtanh": "npuir_vtanh",
 }
 for _alias, _target in _A2_ALIASES.items():
     globals()[_alias] = _make_a2_op(_target)
 
 
-from tilelang.ascend910.language.gemm import dot, gemm  # noqa: E402,F811
+from tilelang.ascend910.language.gemm import dot as dot, gemm as gemm  # noqa: E402,F811
 from tilelang.ascend910.language.npuir import Scope, resource_specialize, rs  # noqa: E402,F401
 from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
-    block_barrier, pipe_barrier, set_flag, subblock_barrier, sync_block_set,
-    sync_block_wait, wait_flag,
+    block_barrier,
+    pipe_barrier,
+    set_flag,
+    subblock_barrier,
+    sync_block_set,
+    sync_block_wait,
+    wait_flag,
 )
 
 from tilelang.ascend910.language import (  # noqa: E402,F401
@@ -144,7 +232,7 @@ from tilelang.ascend910.language import (  # noqa: E402,F401
     alloc_L1,
 )
 
-from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
     npuir_reduce as reduce,
     reduce_absmax,
     reduce_abssum,
@@ -159,7 +247,7 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
     npuir_store_nz2nd as store_nz2nd,
 )
 
-from tilelang.ascend910.language.npuir import atomic_add  # noqa: E402,F811
+from tilelang.ascend910.language.npuir import atomic_add  # noqa: E402,F811,F401
 
 from tilelang.ascend910.language.npuir import (  # noqa: E402,F811,F401
     npuir_arange as arange,
@@ -171,4 +259,23 @@ from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
     npuir_fill as fill,
 )
 
-from tilelang.ascend910.language.npuir import npuir_reshape as reshape  # noqa: E402,F811
+# Legacy ``npuir_*`` spellings stay importable next to their v-prefix aliases
+# (the rebase renamed the public surface to ``clear``/``fill``/``atomic_add``).
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401
+    npuir_atomic_addx4,
+    npuir_clear,
+    npuir_fill,
+)
+
+# v-prefix aliases used by the A2 examples.
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
+    npuir_atomic_addx4 as atomic_addx4,
+)
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
+    npuir_deinterleave as deinterleave,
+)
+from tilelang.ascend910.language.npuir import (  # noqa: E402,F401,F811
+    npuir_interleave as interleave,
+)
+
+from tilelang.ascend910.language.npuir import npuir_reshape as reshape  # noqa: E402,F811,F401
